@@ -1,0 +1,99 @@
+{
+  "targetHour": 8,
+  "targetMinute": 30,
+  "targetSecond": 0,
+  "preWakeMs": 120000,
+  "venueId": 1,
+  "wishes": [
+    {
+      "name": "3号场",
+      "fieldId": 38,
+      "time": "18:00",
+      "timeEnd": "19:00",
+      "enabled": true
+    },
+    {
+      "name": "4号场",
+      "fieldId": 39,
+      "time": "18:00",
+      "timeEnd": "19:00",
+      "enabled": true
+    },
+    {
+      "name": "2号场",
+      "fieldId": 37,
+      "time": "18:00",
+      "timeEnd": "19:00",
+      "enabled": true
+    }
+  ],
+  "fallbackEnabled": true,
+  "fallbackVenues": [
+    {
+      "name": "3号场",
+      "fieldId": 38
+    },
+    {
+      "name": "4号场",
+      "fieldId": 39
+    },
+    {
+      "name": "7号场",
+      "fieldId": 42
+    },
+    {
+      "name": "8号场",
+      "fieldId": 43
+    },
+    {
+      "name": "2号场",
+      "fieldId": 37
+    },
+    {
+      "name": "5号场",
+      "fieldId": 40
+    },
+    {
+      "name": "6号场",
+      "fieldId": 41
+    },
+    {
+      "name": "9号场",
+      "fieldId": 44
+    }
+  ],
+  "fallbackTimes": [
+    {
+      "time": "14:00",
+      "timeEnd": "15:00"
+    },
+    {
+      "time": "15:00",
+      "timeEnd": "16:00"
+    },
+    {
+      "time": "16:00",
+      "timeEnd": "17:00"
+    },
+    {
+      "time": "17:00",
+      "timeEnd": "18:00"
+    },
+    {
+      "time": "18:00",
+      "timeEnd": "19:00"
+    },
+    {
+      "time": "19:00",
+      "timeEnd": "20:00"
+    },
+    {
+      "time": "20:00",
+      "timeEnd": "21:00"
+    },
+    {
+      "time": "21:00",
+      "timeEnd": "22:00"
+    }
+  ]
+}

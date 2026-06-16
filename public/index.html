@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🏸 抢场控制面板</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f0f2f5;
+    color: #333;
+    min-height: 100vh;
+  }
+
+  /* ===== Header ===== */
+  .header {
+    background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
+    color: #fff;
+    padding: 20px 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header h1 { font-size: 22px; font-weight: 600; }
+  .header h1 span { color: #e94560; }
+  .header-time { font-size: 13px; opacity: .8; }
+
+  /* ===== Container ===== */
+  .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+
+  /* ===== Cards ===== */
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+  }
+  .card-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title .badge {
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+  .badge-green { background: #e8f5e9; color: #2e7d32; }
+  .badge-red { background: #fbe9e7; color: #c62828; }
+  .badge-gray { background: #f5f5f5; color: #757575; }
+  .badge-blue { background: #e3f2fd; color: #1565c0; }
+  .badge-orange { background: #fff3e0; color: #e65100; }
+
+  /* ===== Status bar ===== */
+  .status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .status-item {
+    text-align: center;
+    padding: 14px 10px;
+    border-radius: 10px;
+    background: #f8f9fa;
+  }
+  .status-item .num { font-size: 24px; font-weight: 700; }
+  .status-item .label { font-size: 12px; color: #888; margin-top: 4px; }
+  .status-item.active .num { color: #2e7d32; }
+  .status-item.inactive .num { color: #c62828; }
+  .status-item.waiting .num { color: #e65100; }
+
+  /* ===== Timers ===== */
+  .timer-bar {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .timer-display {
+    font-size: 36px;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+    color: #e94560;
+    min-width: 140px;
+  }
+  .timer-display.done { color: #2e7d32; }
+  .timer-info { font-size: 13px; color: #888; }
+
+  /* ===== Wishes ===== */
+  .wish-list { list-style: none; }
+  .wish-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid #e8e8e8;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: #fafafa;
+    transition: all .2s;
+  }
+  .wish-item:hover { border-color: #bbb; background: #fff; }
+  .wish-item.disabled { opacity: .5; }
+  .wish-item .drag-handle {
+    cursor: grab; color: #bbb; font-size: 18px; user-select: none;
+  }
+  .wish-item .rank {
+    font-weight: 700; color: #e94560; min-width: 20px; font-size: 14px;
+  }
+  .wish-item select, .wish-item input[type="text"] {
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    background: #fff;
+    outline: none;
+    flex: 1;
+    max-width: 140px;
+  }
+  .wish-item select:focus { border-color: #0f3460; }
+  .wish-item .time-group { display: flex; align-items: center; gap: 4px; }
+  .wish-item .time-group select { max-width: 90px; }
+  .wish-item .toggle {
+    width: 36px; height: 20px; border-radius: 10px;
+    background: #ccc; cursor: pointer; position: relative;
+    transition: .2s; flex-shrink: 0;
+  }
+  .wish-item .toggle.on { background: #2e7d32; }
+  .wish-item .toggle::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%; background: #fff;
+    transition: .2s;
+  }
+  .wish-item .toggle.on::after { left: 18px; }
+  .wish-item .del-btn {
+    background: none; border: none; color: #ccc; cursor: pointer;
+    font-size: 18px; padding: 4px;
+  }
+  .wish-item .del-btn:hover { color: #c62828; }
+
+  .add-wish-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border: 2px dashed #ddd; border-radius: 8px;
+    background: none; cursor: pointer; color: #888; font-size: 13px;
+    margin-top: 6px; transition: .2s;
+  }
+  .add-wish-btn:hover { border-color: #0f3460; color: #0f3460; }
+
+  /* ===== Fallback ===== */
+  .fallback-grid {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
+  }
+  .fallback-tag {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 20px;
+    background: #f0f2f5; font-size: 13px;
+  }
+  .fallback-tag .del { cursor: pointer; color: #999; }
+  .fallback-tag .del:hover { color: #c62828; }
+
+  /* ===== Time slots ===== */
+  .time-grid {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+  }
+  .time-chip {
+    padding: 4px 12px; border-radius: 16px; border: 1px solid #ddd;
+    font-size: 12px; cursor: pointer; transition: .2s;
+    background: #fff;
+  }
+  .time-chip.selected { background: #0f3460; color: #fff; border-color: #0f3460; }
+  .time-chip:hover { border-color: #0f3460; }
+
+  /* ===== Logs ===== */
+  .log-container {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 14px;
+    height: 280px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .log-entry { color: #a8d8ea; }
+  .log-entry .time { color: #888; }
+  .log-entry.success { color: #66bb6a; }
+  .log-entry.error { color: #ef5350; }
+  .log-entry.highlight { color: #ffd54f; font-weight: 600; }
+  .log-entry.info { color: #a8d8ea; }
+  .log-empty { color: #555; text-align: center; padding: 40px 0; }
+
+  /* ===== Buttons ===== */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 10px 24px; border: none; border-radius: 8px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: .2s;
+  }
+  .btn-primary { background: #e94560; color: #fff; }
+  .btn-primary:hover { background: #d63851; }
+  .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+  .btn-secondary { background: #f0f2f5; color: #333; }
+  .btn-secondary:hover { background: #e0e2e5; }
+  .btn-success { background: #2e7d32; color: #fff; }
+  .btn-success:hover { background: #1b5e20; }
+  .btn-group { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+
+  /* ===== Toast ===== */
+  .toast {
+    position: fixed; top: 20px; right: 20px;
+    padding: 14px 24px; border-radius: 8px;
+    color: #fff; font-size: 14px;
+    z-index: 1000; opacity: 0;
+    transform: translateY(-20px);
+    transition: all .3s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.success { background: #2e7d32; }
+  .toast.error { background: #c62828; }
+  .toast.info { background: #1565c0; }
+
+  /* ===== Scrollbar ===== */
+  .log-container::-webkit-scrollbar { width: 4px; }
+  .log-container::-webkit-scrollbar-track { background: #111; }
+  .log-container::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 600px) {
+    .header { padding: 14px 16px; flex-direction: column; gap: 6px; text-align: center; }
+    .container { padding: 12px; }
+    .timer-display { font-size: 28px; }
+    .wish-item { flex-wrap: wrap; }
+    .wish-item select { max-width: 100px; }
+    .status-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>🏸 <span>抢场</span>控制面板</h1>
+  <div class="header-time" id="headerTime">加载中...</div>
+</div>
+
+<div class="container">
+
+  <!-- Status -->
+  <div class="card">
+    <div class="card-title">
+      📊 运行状态
+      <span id="statusBadge" class="badge badge-gray">检查中...</span>
+    </div>
+    <div class="status-grid">
+      <div class="status-item" id="sAuth">
+        <div class="num">--</div>
+        <div class="label">登录状态</div>
+      </div>
+      <div class="status-item" id="sWishes">
+        <div class="num">--</div>
+        <div class="label">志愿数</div>
+      </div>
+      <div class="status-item" id="sMode">
+        <div class="num">--</div>
+        <div class="label">扫荡模式</div>
+      </div>
+      <div class="status-item" id="sCountdown" class="waiting">
+        <div class="num timer-display" id="countdownNum">--:--:--</div>
+        <div class="label">距下次抢场</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 志愿配置 -->
+  <div class="card">
+    <div class="card-title">
+      🎯 抢场志愿
+      <span class="badge badge-blue">按优先级从上到下执行</span>
+    </div>
+    <p style="font-size:13px;color:#888;margin-bottom:12px;">
+      拖拽调整顺序 · 每个志愿抢到即停 · 全部失败进入扫荡
+    </p>
+    <ul class="wish-list" id="wishList"></ul>
+    <button class="add-wish-btn" onclick="addWish()">＋ 添加志愿</button>
+  </div>
+
+  <!-- 扫荡设置 -->
+  <div class="card" id="fallbackSection">
+    <div class="card-title">
+      ♻️ 扫荡设置
+      <label style="margin-left:auto;font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <input type="checkbox" id="fallbackToggle" checked onchange="saveConfig()"> 启用扫荡
+      </label>
+    </div>
+
+    <div style="font-size:13px;color:#888;margin-bottom:8px;">捡漏场地（按优先级）</div>
+    <div class="fallback-grid" id="fallbackVenues"></div>
+
+    <div style="font-size:13px;color:#888;margin:12px 0 8px;">捡漏时间段</div>
+    <div class="time-grid" id="fallbackTimes"></div>
+
+    <div class="btn-group">
+      <button class="btn btn-success" onclick="saveConfig();showToast('已保存','success')">💾 保存配置</button>
+      <button class="btn btn-primary" id="bookBtn" onclick="triggerBook()">⚡ 立即抢场</button>
+    </div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="card">
+    <div class="card-title">
+      📋 实时日志
+      <button class="btn btn-secondary" style="margin-left:auto;padding:4px 12px;font-size:12px;" onclick="clearLogs()">清空</button>
+    </div>
+    <div class="log-container" id="logContainer">
+      <div class="log-empty">等待日志...</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== 常量 ==========
+const VENUES = [
+  { id: 36, name: '1号场' }, { id: 37, name: '2号场' }, { id: 38, name: '3号场' },
+  { id: 39, name: '4号场' }, { id: 40, name: '5号场' }, { id: 41, name: '6号场' },
+  { id: 42, name: '7号场' }, { id: 43, name: '8号场' }, { id: 44, name: '9号场' },
+  { id: 45, name: '10号场' },
+];
+const TIMES = ['10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00'];
+
+let config = null;
+let isDragging = null;
+let dragOverIdx = null;
+
+// ========== 加载 ==========
+async function loadConfig() {
+  const r = await fetch('/api/config');
+  const d = await r.json();
+  if (d.success) config = d.config;
+  else config = getDefaultConfig();
+  render();
+}
+
+function getDefaultConfig() {
+  return {
+    targetHour: 8, targetMinute: 30,
+    preWakeMs: 120000, venueId: 1,
+    wishes: [
+      { name: '3号场', fieldId: 38, time: '21:00', timeEnd: '22:00', enabled: true },
+      { name: '4号场', fieldId: 39, time: '21:00', timeEnd: '22:00', enabled: true },
+    ],
+    fallbackEnabled: true,
+    fallbackVenues: [{name:'3号场',fieldId:38},{name:'4号场',fieldId:39},{name:'7号场',fieldId:42},{name:'8号场',fieldId:43}],
+    fallbackTimes: [{time:'21:00',timeEnd:'22:00'},{time:'18:00',timeEnd:'19:00'}],
+  };
+}
+
+// ========== 保存 ==========
+async function saveConfig() {
+  // 读取表单
+  const items = document.querySelectorAll('.wish-item');
+  const wishes = [];
+  items.forEach((item, i) => {
+    wishes.push({
+      name: item.querySelector('.vname').value,
+      fieldId: parseInt(item.querySelector('.vfield').value),
+      time: item.querySelector('.vstart').value,
+      timeEnd: item.querySelector('.vend').value,
+      enabled: item.querySelector('.toggle').classList.contains('on'),
+    });
+  });
+
+  // 扫荡场地
+  const fbVenues = [];
+  document.querySelectorAll('.fallback-tag').forEach(tag => {
+    const name = tag.dataset.name;
+    const fieldId = parseInt(tag.dataset.id);
+    if (name) fbVenues.push({ name, fieldId });
+  });
+
+  // 扫荡时间
+  const fbTimes = [];
+  document.querySelectorAll('.time-chip.selected').forEach(chip => {
+    const endH = String(parseInt(chip.dataset.time) + 1).padStart(2,'0');
+    fbTimes.push({ time: chip.dataset.time, timeEnd: endH + ':00' });
+  });
+
+  config.wishes = wishes;
+  config.fallbackEnabled = document.getElementById('fallbackToggle').checked;
+  config.fallbackVenues = fbVenues;
+  config.fallbackTimes = fbTimes;
+
+  await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+}
+
+// ========== 渲染 ==========
+function render() {
+  renderWishes();
+  renderFallback();
+  renderStatus();
+}
+
+function renderWishes() {
+  const list = document.getElementById('wishList');
+  list.innerHTML = '';
+  (config.wishes || []).forEach((w, i) => {
+    const li = document.createElement('li');
+    li.className = 'wish-item' + (w.enabled === false ? ' disabled' : '');
+    li.draggable = true;
+    li.dataset.idx = i;
+
+    li.innerHTML = `
+      <span class="drag-handle" draggable="false">⠿</span>
+      <span class="rank">#${i+1}</span>
+      <span style="font-size:13px;color:#888;">场地</span>
+      <select class="vfield" onchange="updateWishName(this)">
+        ${VENUES.map(v => `<option value="${v.id}" ${v.id === w.fieldId ? 'selected' : ''}>${v.name}</option>`).join('')}
+      </select>
+      <input type="text" class="vname" value="${w.name}" placeholder="名称" style="max-width:70px;">
+      <span style="font-size:13px;color:#888;">时间</span>
+      <div class="time-group">
+        <select class="vstart" onchange="updateEndTime(this)">
+          ${TIMES.map(t => `<option value="${t}" ${t === w.time ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+        <span>—</span>
+        <select class="vend">
+          ${TIMES.map(t => `<option value="${t}" ${t === w.timeEnd ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div class="toggle ${w.enabled !== false ? 'on' : ''}" onclick="toggleWish(this)"></div>
+      <button class="del-btn" onclick="delWish(this)">✕</button>
+    `;
+
+    // 拖拽事件
+    li.addEventListener('dragstart', e => { isDragging = parseInt(li.dataset.idx); e.dataTransfer.effectAllowed = 'move'; });
+    li.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    li.addEventListener('drop', e => {
+      e.preventDefault();
+      if (isDragging !== null && isDragging !== parseInt(li.dataset.idx)) {
+        const from = isDragging;
+        const to = parseInt(li.dataset.idx);
+        const item = config.wishes.splice(from, 1)[0];
+        config.wishes.splice(to, 0, item);
+        renderWishes();
+        saveConfig();
+      }
+      isDragging = null;
+    });
+    li.addEventListener('dragend', () => { isDragging = null; });
+
+    list.appendChild(li);
+  });
+}
+
+function renderFallback() {
+  // 场地
+  const container = document.getElementById('fallbackVenues');
+  container.innerHTML = '';
+  (config.fallbackVenues || []).forEach(v => {
+    const tag = document.createElement('span');
+    tag.className = 'fallback-tag';
+    tag.dataset.name = v.name;
+    tag.dataset.id = v.fieldId;
+    tag.innerHTML = `${v.name} <span class="del" onclick="this.parentElement.remove();saveConfig();">✕</span>`;
+    container.appendChild(tag);
+  });
+
+  // 添加场地按钮
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn btn-secondary';
+  addBtn.style.cssText = 'padding:4px 10px;font-size:12px;';
+  addBtn.textContent = '＋ 添加场地';
+  addBtn.onclick = () => {
+    const used = (config.fallbackVenues || []).map(v => v.fieldId);
+    const avail = VENUES.find(v => !used.includes(v.id));
+    if (avail) {
+      if (!config.fallbackVenues) config.fallbackVenues = [];
+      config.fallbackVenues.push({ name: avail.name, fieldId: avail.id });
+      saveConfig().then(render);
+    }
+  };
+  container.appendChild(addBtn);
+
+  // 时间段
+  const timeContainer = document.getElementById('fallbackTimes');
+  timeContainer.innerHTML = '';
+  const selectedTimes = (config.fallbackTimes || []).map(t => t.time);
+  TIMES.forEach(t => {
+    const chip = document.createElement('span');
+    chip.className = 'time-chip' + (selectedTimes.includes(t) ? ' selected' : '');
+    chip.textContent = t;
+    chip.dataset.time = t;
+    chip.onclick = () => {
+      chip.classList.toggle('selected');
+      saveConfig();
+    };
+    timeContainer.appendChild(chip);
+  });
+}
+
+async function renderStatus() {
+  const r = await fetch('/api/status');
+  const s = await r.json();
+
+  document.getElementById('sAuth').innerHTML = s.hasAuth
+    ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">已登录</div>'
+    : '<div class="num" style="color:#c62828">❌</div><div class="label">未登录</div>';
+
+  document.getElementById('sWishes').innerHTML =
+    `<div class="num">${s.wishes}</div><div class="label">激活志愿</div>`;
+
+  document.getElementById('sMode').innerHTML = s.fallback
+    ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">扫荡已启用</div>'
+    : '<div class="num" style="color:#888">⛔</div><div class="label">扫荡已关闭</div>';
+
+  document.getElementById('statusBadge').textContent = s.hasAuth ? '就绪' : '未登录';
+  document.getElementById('statusBadge').className = 'badge ' + (s.hasAuth ? 'badge-green' : 'badge-red');
+}
+
+// ========== 倒计时 ==========
+function updateCountdown() {
+  const now = new Date();
+  const target = new Date();
+  target.setHours(config?.targetHour ?? 8, config?.targetMinute ?? 30, 0, 0);
+  if (target <= now) target.setDate(target.getDate() + 1);
+
+  const diff = target - now;
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+
+  const el = document.getElementById('countdownNum');
+  if (diff <= 0) {
+    el.textContent = '抢场中...';
+    el.className = 'timer-display done';
+  } else {
+    el.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    el.className = 'timer-display';
+  }
+}
+
+// ========== 日志 ==========
+function appendLog(entry) {
+  const container = document.getElementById('logContainer');
+  const empty = container.querySelector('.log-empty');
+  if (empty) empty.remove();
+
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+
+  const msg = entry.msg || '';
+  if (msg.includes('🎉') || msg.includes('成功')) div.className += ' success';
+  else if (msg.includes('❌') || msg.includes('失败') || msg.includes('错误')) div.className += ' error';
+  else if (msg.includes('🎯') || msg.includes('⚡') || msg.includes('命中')) div.className += ' highlight';
+  else div.className += ' info';
+
+  div.innerHTML = `<span class="time">[${entry.time}]</span> ${msg}`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function clearLogs() {
+  const container = document.getElementById('logContainer');
+  container.innerHTML = '<div class="log-empty">日志已清空</div>';
+}
+
+// ========== 表单操作 ==========
+function updateWishName(select) {
+  const opt = select.options[select.selectedIndex];
+  const item = select.closest('.wish-item');
+  item.querySelector('.vname').value = opt.text;
+  saveConfig();
+}
+function updateEndTime(select) {
+  const h = parseInt(select.value);
+  const end = String(Math.min(h + 1, 22)).padStart(2,'0') + ':00';
+  const item = select.closest('.wish-item');
+  item.querySelector('.vend').value = end;
+  saveConfig();
+}
+function toggleWish(el) { el.classList.toggle('on'); saveConfig(); }
+function delWish(el) {
+  const item = el.closest('.wish-item');
+  const idx = Array.from(item.parentElement.children).indexOf(item);
+  config.wishes.splice(idx, 1);
+  renderWishes();
+  saveConfig();
+}
+function addWish() {
+  const used = (config.wishes || []).map(w => w.fieldId);
+  const avail = VENUES.find(v => !used.includes(v.id));
+  if (avail) {
+    if (!config.wishes) config.wishes = [];
+    config.wishes.push({ name: avail.name, fieldId: avail.id, time: '21:00', timeEnd: '22:00', enabled: true });
+    saveConfig().then(render);
+  } else {
+    config.wishes.push({ name: '场地', fieldId: 36, time: '21:00', timeEnd: '22:00', enabled: true });
+    saveConfig().then(render);
+  }
+}
+
+// ========== 触发抢场 ==========
+async function triggerBook() {
+  const btn = document.getElementById('bookBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 抢场中...';
+  appendLog({ time: new Date().toLocaleTimeString('zh-CN'), msg: '⚡ 手动触发抢场...' });
+
+  const r = await fetch('/api/book', { method: 'POST' });
+  const d = await r.json();
+  if (!d.success) {
+    appendLog({ time: new Date().toLocaleTimeString('zh-CN'), msg: '❌ ' + (d.error || '') });
+  }
+
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = '⚡ 立即抢场';
+  }, 3000);
+}
+
+// ========== Toast ==========
+function showToast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + type + ' show';
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ========== SSE 实时流 ==========
+function connectSSE() {
+  const evtSource = new EventSource('/api/stream');
+  evtSource.onmessage = e => {
+    try {
+      const entry = JSON.parse(e.data);
+      appendLog(entry);
+    } catch(err) {}
+  };
+  evtSource.onerror = () => {
+    // 断开后重连
+    setTimeout(connectSSE, 2000);
+  };
+}
+
+// ========== 时钟 ==========
+function updateClock() {
+  document.getElementById('headerTime').textContent = new Date().toLocaleString('zh-CN');
+}
+
+// ========== 初始化 ==========
+loadConfig().then(() => {
+  render();
+  connectSSE();
+  setInterval(updateCountdown, 1000);
+  setInterval(updateClock, 1000);
+  setInterval(() => fetch('/api/status').then(r => r.json()).then(s => {
+    document.getElementById('sAuth').innerHTML = s.hasAuth
+      ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">已登录</div>'
+      : '<div class="num" style="color:#c62828">❌</div><div class="label">未登录</div>';
+    document.getElementById('statusBadge').textContent = s.hasAuth ? '就绪' : '未登录';
+    document.getElementById('statusBadge').className = 'badge ' + (s.hasAuth ? 'badge-green' : 'badge-red');
+  }), 5000);
+  updateClock();
+  updateCountdown();
+});
+</script>
+</body>
+</html>
