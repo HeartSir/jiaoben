@@ -16,6 +16,7 @@ services:
   # Cron 任务（每天 8:28 自动抢场）
   - type: cron
     name: daily-booking
+    env: node
     schedule: "28 8 * * *"
     buildCommand: npm install && npx playwright install chromium
     startCommand: node book.js
