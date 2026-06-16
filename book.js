@@ -155,10 +155,32 @@ class BookingEngine {
 
     // 启动无头浏览器
     log('🚀 启动无头浏览器...');
-    this.browser = await chromium.launch({
+
+    // Render 环境可能需要重设 executablePath
+    const launchOpts = {
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+    };
+
+    // 如果设置了 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH，用它
+    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+      launchOpts.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+    }
+
+    // 尝试启动，如果报 executable 错误则安装后重试
+    try {
+      this.browser = await chromium.launch(launchOpts);
+    } catch (err) {
+      const msg = err.message || '';
+      if (msg.includes('Executable') && msg.includes('exist')) {
+        log('⚠️ 浏览器未找到，尝试安装...');
+        const { execSync } = require('child_process');
+        execSync('npx playwright install --with-deps chromium', { stdio: 'inherit' });
+        this.browser = await chromium.launch(launchOpts);
+      } else {
+        throw err;
+      }
+    }
 
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 800 },

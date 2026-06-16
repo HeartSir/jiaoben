@@ -2,21 +2,14 @@
 # 一键部署到 Render
 
 services:
-  # Web 服务（健康检查 + 手动触发）
   - type: web
     name: venue-booking
     env: node
-    buildCommand: npm install && npx playwright install chromium
+    buildCommand: npm install && npx playwright install --with-deps chromium
     startCommand: node server.js
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: 20
-
-  # Cron 任务（每天 8:28 自动抢场）
-  - type: cron
-    name: daily-booking
-    env: node
-    schedule: "28 8 * * *"
-    buildCommand: npm install && npx playwright install chromium
-    startCommand: node book.js
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/.cache/ms-playwright
