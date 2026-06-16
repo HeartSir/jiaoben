@@ -56,14 +56,14 @@ const AUTH_FILE = path.join(__dirname, '.venue-auth.json');
       localStorage: [
         { name: 'accessToken', value: storage.accessToken },
         { name: 'refreshToken', value: storage.refreshToken || '' },
-        { name: 'userInfo', value: storage.userInfo || '' },
+        { name: 'userInfo', value: typeof storage.userInfo === 'object' ? JSON.stringify(storage.userInfo) : (storage.userInfo || '') },
       ]
     }, {
       origin: 'http://cgzx.scu.edu.cn',
       localStorage: [
         { name: 'accessToken', value: storage.accessToken },
         { name: 'refreshToken', value: storage.refreshToken || '' },
-        { name: 'userInfo', value: storage.userInfo || '' },
+        { name: 'userInfo', value: typeof storage.userInfo === 'object' ? JSON.stringify(storage.userInfo) : (storage.userInfo || '') },
       ]
     }]
   };

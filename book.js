@@ -133,13 +133,14 @@ class BookingEngine {
     const origin = this.auth?.origins?.find(o =>
       ['http://cgzx.scu.edu.cn', 'https://cgzx.scu.edu.cn'].includes(o.origin)
     );
-    const userInfoStr = origin?.localStorage?.find(l => l.name === 'userInfo')?.value;
-    if (userInfoStr) {
-      try {
-        const info = JSON.parse(userInfoStr);
-        if (info.data?.userId) return info.data.userId;
+    const userInfoRaw = origin?.localStorage?.find(l => l.name === 'userInfo')?.value;
+    if (userInfoRaw) {
+      // userInfo 可能是 JSON 字符串，也可能是已解析的对象
+      const info = typeof userInfoRaw === 'string' ? (() => { try { return JSON.parse(userInfoRaw); } catch(e) { return null; } })() : userInfoRaw;
+      if (info) {
+        if (info.data?.userId) return info.data?.userId;
         if (info.userId) return info.userId;
-      } catch(e) {}
+      }
     }
     return null;
   }
