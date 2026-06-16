@@ -5,8 +5,8 @@ services:
   - type: web
     name: venue-booking
     env: node
-    buildCommand: npm install && npx playwright install chromium chromium-headless-shell
-    startCommand: node server.js
+    buildCommand: PLAYWRIGHT_BROWSERS_PATH=0 npm install && npx playwright install chromium chromium-headless-shell
+    startCommand: PLAYWRIGHT_BROWSERS_PATH=0 node server.js
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
