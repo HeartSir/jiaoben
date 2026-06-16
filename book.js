@@ -156,31 +156,32 @@ class BookingEngine {
     // 启动无头浏览器
     log('🚀 启动无头浏览器...');
 
-    // Render 环境可能需要重设 executablePath
+    // Render 环境: 使用 chromium 而不是 headless-shell
     const launchOpts = {
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
     };
 
-    // 如果设置了 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH，用它
+    // 如有自定义路径则使用
     if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
       launchOpts.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
     }
 
-    // 尝试启动，如果报 executable 错误则安装后重试
-    try {
-      this.browser = await chromium.launch(launchOpts);
-    } catch (err) {
-      const msg = err.message || '';
-      if (msg.includes('Executable') && msg.includes('exist')) {
-        log('⚠️ 浏览器未找到，尝试安装...');
-        const { execSync } = require('child_process');
-        execSync('npx playwright install --with-deps chromium', { stdio: 'inherit' });
-        this.browser = await chromium.launch(launchOpts);
-      } else {
-        throw err;
+    // Render 环境: 查找已安装的 chromium 完整版（非 headless-shell）
+    const cacheDir = '/opt/render/.cache/ms-playwright';
+    if (fs.existsSync(cacheDir)) {
+      const dirs = fs.readdirSync(cacheDir).filter(d => d.startsWith('chromium-') && !d.includes('headless'));
+      if (dirs.length > 0) {
+        dirs.sort().reverse();
+        const chromePath = path.join(cacheDir, dirs[0], 'chrome-linux64', 'chrome');
+        if (fs.existsSync(chromePath)) {
+          launchOpts.executablePath = chromePath;
+          log(`📂 使用 Chromium: ${dirs[0]}`);
+        }
       }
     }
+
+    this.browser = await chromium.launch(launchOpts);
 
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 800 },

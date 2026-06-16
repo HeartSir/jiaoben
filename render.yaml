@@ -5,11 +5,9 @@ services:
   - type: web
     name: venue-booking
     env: node
-    buildCommand: npm install && npx playwright install --with-deps chromium
+    buildCommand: npm install && npx playwright install chromium
     startCommand: node server.js
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: 20
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: /opt/render/.cache/ms-playwright
