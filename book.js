@@ -156,32 +156,45 @@ class BookingEngine {
     // 启动无头浏览器
     log('🚀 启动无头浏览器...');
 
-    // Render 环境: 使用 chromium 而不是 headless-shell
     const launchOpts = {
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
     };
 
-    // 如有自定义路径则使用
-    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
-      launchOpts.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-    }
-
-    // Render 环境: 查找已安装的 chromium 完整版（非 headless-shell）
+    // 在 Linux (Render) 上自动查找已安装的 chromium
     const cacheDir = '/opt/render/.cache/ms-playwright';
     if (fs.existsSync(cacheDir)) {
-      const dirs = fs.readdirSync(cacheDir).filter(d => d.startsWith('chromium-') && !d.includes('headless'));
-      if (dirs.length > 0) {
-        dirs.sort().reverse();
-        const chromePath = path.join(cacheDir, dirs[0], 'chrome-linux64', 'chrome');
-        if (fs.existsSync(chromePath)) {
-          launchOpts.executablePath = chromePath;
-          log(`📂 使用 Chromium: ${dirs[0]}`);
+      const dirs = fs.readdirSync(cacheDir).sort().reverse();
+      // 优先用完整版 chromium（非 headless-shell）
+      const full = dirs.find(d => d.startsWith('chromium-') && !d.includes('headless'));
+      if (full) {
+        const p = path.join(cacheDir, full, 'chrome-linux64', 'chrome');
+        if (fs.existsSync(p)) {
+          launchOpts.executablePath = p;
+          log(`📂 使用 chromium: ${full}`);
         }
       }
     }
 
-    this.browser = await chromium.launch(launchOpts);
+    // 如果环境变量指定了路径也用它
+    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+      launchOpts.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+    }
+
+    try {
+      this.browser = await chromium.launch(launchOpts);
+    } catch (err) {
+      const msg = err.message || '';
+      // 如果找不到浏览器，自动安装
+      if (msg.includes('Executable') && msg.includes('exist')) {
+        log('⚠️ 浏览器未找到，正在安装...');
+        const { execSync } = require('child_process');
+        execSync('npx playwright install chromium', { stdio: 'inherit', timeout: 120000 });
+        this.browser = await chromium.launch(launchOpts);
+      } else {
+        throw err;
+      }
+    }
 
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 800 },
