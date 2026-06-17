@@ -636,7 +636,7 @@ class BookingEngine {
 }
 
 // ========== 直接 API 抢场（服务器/无头环境用，不需要浏览器） ==========
-async function directMain() {
+async function directMain(opts = {}) {
   const cfg = loadConfig();
   if (!cfg) {
     log('❌ 未找到 config.json');
@@ -677,7 +677,7 @@ async function directMain() {
   if (target <= now) target.setDate(target.getDate() + 1);
 
   const wakeTime = target.getTime() - preWakeMs;
-  if (now.getTime() < wakeTime) {
+  if (!opts.skipWait && now.getTime() < wakeTime) {
     const sec = Math.round((wakeTime - now.getTime()) / 1000);
     log(`⏳ 等待到 ${targetHour}:${String(targetMinute).padStart(2,'0')} (${sec}秒后)`);
     await sleep(wakeTime - Date.now());
@@ -787,11 +787,11 @@ async function directMain() {
 }
 
 // ========== 主流程（自动选择模式） ==========
-async function main() {
+async function main(opts = {}) {
   // Linux/服务器环境：直接 API 模式，不启动浏览器
   if (process.platform === 'linux') {
     log('🖥️ 服务器模式（直接 API 调用）');
-    return directMain();
+    return directMain(opts);
   }
 
   // Windows/桌面环境：使用浏览器引擎

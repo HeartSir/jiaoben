@@ -322,6 +322,7 @@
     <div class="btn-group">
       <button class="btn btn-success" onclick="saveConfig();showToast('已保存','success')">💾 保存配置</button>
       <button class="btn btn-primary" id="bookBtn" onclick="triggerBook()">⚡ 立即抢场</button>
+      <button class="btn btn-warning" id="testBtn" onclick="triggerTest()" style="background:#e65100;border-color:#e65100;">⚡ 立即测试（跳过等待）</button>
     </div>
   </div>
 
@@ -850,6 +851,29 @@ async function triggerBook() {
   setTimeout(() => {
     btn.disabled = false;
     btn.textContent = '⚡ 立即抢场';
+  }, 3000);
+}
+
+// ========== 立即测试（跳过等待时间） ==========
+async function triggerTest() {
+  const btn = document.getElementById('testBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 测试中...';
+  appendLog({ time: new Date().toLocaleTimeString('zh-CN'), msg: '⚡ 免等待测试模式...' });
+
+  const r = await fetch('/api/book', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ testNow: true }),
+  });
+  const d = await r.json();
+  if (!d.success) {
+    appendLog({ time: new Date().toLocaleTimeString('zh-CN'), msg: '❌ ' + (d.error || '') });
+  }
+
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = '⚡ 立即测试（跳过等待）';
   }, 3000);
 }
 

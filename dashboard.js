@@ -286,7 +286,8 @@ app.post('/api/book', async (req, res) => {
   res.json({ success: true, message: '抢场已触发' });
 
   try {
-    await main();
+    // testNow=true → 跳过等待时间，立即执行
+    await main({ skipWait: req.body?.testNow === true });
     const result = getResult();
     if (result) pushToRender(result);
   } catch(e) {
