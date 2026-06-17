@@ -1,11 +1,11 @@
 # 🏸 川大场馆抢订系统 - Render 部署配置
-# 一键部署：点这个链接
-# https://render.com/deploy?repo=https://github.com/YOUR_USERNAME/venue-booking
 #
 # 部署后操作：
-#   1. 设置环境变量 DASHBOARD_PASSWORD=（可选面板密码）
-#   2. 用「粘贴 Token」功能登录
+#   1. 设置环境变量 DASHBOARD_PASSWORD（可选面板密码）
+#   2. 进面板后用「粘贴 Token」功能登录
 #   3. 用 UptimeRobot 或 cron-job.org 每 5 分钟 ping 一次防止休眠
+#
+# 注意：免费版不支持持久化磁盘，重启后需重新贴 Token
 
 services:
   - type: web
@@ -22,11 +22,5 @@ services:
         value: "3456"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: /opt/render/.cache/ms-playwright
-      - key: RENDER_DATA_DIR
-        value: /opt/render/project/.data
       - key: DASHBOARD_PASSWORD
         sync: false  # 部署后在 Render 面板手动设置
-    disk:
-      name: venue-data
-      mountPath: /opt/render/project/.data
-      sizeGB: 1

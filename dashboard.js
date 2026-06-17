@@ -23,8 +23,10 @@ const PORT = parseInt(process.env.PORT || '3456', 10);
 // 📌 路径模式
 const BASE_DIR = (process.pkg ? path.dirname(process.execPath) : __dirname);
 
-// 📌 持久数据目录（Render 环境使用专用磁盘，避免重启丢失）
-const DATA_DIR = process.env.RENDER_DATA_DIR || BASE_DIR;
+// 📌 持久数据目录
+// Render 免费版不支持磁盘挂载，用 /tmp/venue-data（重启丢失）
+// Render 付费版/Windows 开发环境用 BASE_DIR
+const DATA_DIR = process.env.RENDER_DATA_DIR || (process.platform === 'linux' ? '/tmp/venue-data' : BASE_DIR);
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const AUTH_FILE = path.join(DATA_DIR, '.venue-auth.json');
 

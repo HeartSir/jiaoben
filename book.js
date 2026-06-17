@@ -12,7 +12,10 @@ const fs = require('fs');
 
 // ========== 路径 ==========
 const BASE_DIR = (process.pkg ? path.dirname(process.execPath) : __dirname);
-const DATA_DIR = process.env.RENDER_DATA_DIR || BASE_DIR;
+// 📌 持久数据目录
+// Render 免费版不支持磁盘挂载，用 /tmp/venue-data（重启丢失）
+// Render 付费版/Windows 开发环境用 BASE_DIR
+const DATA_DIR = process.env.RENDER_DATA_DIR || (process.platform === 'linux' ? '/tmp/venue-data' : BASE_DIR);
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const AUTH_FILE = path.join(DATA_DIR, '.venue-auth.json');
 
