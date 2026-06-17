@@ -211,11 +211,17 @@ async function directGetUserId() {
     const token = readToken();
     if (!token) return null;
     const parts = token.split('.');
-    if (parts.length !== 3) return null;
+    if (parts.length !== 3) {
+      log(`⚠️ Token 格式异常（不是 JWT）`);
+      return null;
+    }
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    log(`🔍 JWT payload 字段: ${Object.keys(payload).join(', ')}`);
     // 常见字段名：userId, id, sub, user_id
     return payload.userId || payload.id || payload.sub || payload.user_id || null;
-  } catch(e) {}
+  } catch(e) {
+    log(`⚠️ JWT 解析失败: ${e.message}`);
+  }
 
   return null;
 }
@@ -724,9 +730,9 @@ async function directMain(opts = {}) {
             endTime: wish.timeEnd,
             bookingDate: today,
           }],
-          userId,
           venueId,
           couponId: '',
+          ...(userId ? { userId } : {}),
         });
         if (order.success && order.code === 0) {
           log(`🎉🎉🎉 抢场成功! ${wish.name} ${wish.time}`);
@@ -768,9 +774,9 @@ async function directMain(opts = {}) {
                   endTime: t.timeEnd,
                   bookingDate: today,
                 }],
-                userId,
                 venueId,
                 couponId: '',
+                ...(userId ? { userId } : {}),
               });
               if (order.success && order.code === 0) {
                 log(`🎉 捡漏成功! ${v.name} ${t.time}`);
@@ -1055,10 +1061,13 @@ async function scanAvailableSlots() {
   const slots = [];
   log(`📡 直接 API 扫描 ${fields.length} 个场地...`);
 
+  let firstField = true;
   for (const field of fields) {
     try {
       const result = await directGetBookableTimes(field.id);
-      if (result.success && result.code === 0 && result.data) {
+      const success = result.success && result.code === 0 && result.data;
+      if (firstField) { firstField = false; log(`📡 ${field.name} API: code=${result.code} success=${result.success} data=${!!result.data}`); if (result.msg) log(`  响应: ${result.msg}`); }
+      if (success) {
         const days = Array.isArray(result.data) ? result.data : [];
         const day = days.find(d => d.date === today) || days[0];
         if (day?.timeSlots) {
