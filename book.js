@@ -635,8 +635,166 @@ class BookingEngine {
   }
 }
 
-// ========== 主流程 ==========
+// ========== 直接 API 抢场（服务器/无头环境用，不需要浏览器） ==========
+async function directMain() {
+  const cfg = loadConfig();
+  if (!cfg) {
+    log('❌ 未找到 config.json');
+    _lastResult = { success: false, error: '无配置文件' };
+    return _lastResult;
+  }
+
+  // 检查 Token
+  if (isTokenExpired()) {
+    log('🔄 Token 已过期，尝试刷新...');
+    const refreshed = await directRefreshToken();
+    if (!refreshed) {
+      _lastResult = { success: false, error: '登录已过期，请重新粘贴 Token' };
+      return _lastResult;
+    }
+  }
+
+  // 获取 userId
+  let userId = await directGetUserId();
+  if (!userId) {
+    log('📡 获取用户信息...');
+    const userRes = await callDirectAPI('GET', '/member/user/get');
+    if (userRes.success && userRes.code === 0 && userRes.data?.userId) {
+      userId = userRes.data.userId;
+    }
+  }
+
+  const venueId = cfg.venueId || 1;
+  const targetHour = cfg.targetHour ?? 8;
+  const targetMinute = cfg.targetMinute ?? 30;
+  const targetSecond = cfg.targetSecond ?? 0;
+  const preWakeMs = cfg.preWakeMs ?? 120000;
+
+  // 计算等待时间
+  const now = new Date();
+  const target = new Date();
+  target.setHours(targetHour, targetMinute, targetSecond, 0);
+  if (target <= now) target.setDate(target.getDate() + 1);
+
+  const wakeTime = target.getTime() - preWakeMs;
+  if (now.getTime() < wakeTime) {
+    const sec = Math.round((wakeTime - now.getTime()) / 1000);
+    log(`⏳ 等待到 ${targetHour}:${String(targetMinute).padStart(2,'0')} (${sec}秒后)`);
+    await sleep(wakeTime - Date.now());
+  }
+
+  // 精准等待到目标秒
+  const exact = target.getTime();
+  while (Date.now() < exact - 30) await sleep(10);
+  while (Date.now() < exact) { /* busy wait */ }
+
+  log(`⚡⚡⚡ 猎杀时刻! ${new Date().toLocaleTimeString()} ⚡⚡⚡`);
+
+  let booked = false;
+  const today = new Date().toISOString().split('T')[0];
+
+  // === 按优先级依次尝试志愿 ===
+  const wishes = (cfg.wishes || []).filter(w => w.enabled !== false);
+  for (let i = 0; i < wishes.length; i++) {
+    if (booked) break;
+    const wish = wishes[i];
+    log(`🎯 [第${i+1}志愿] ${wish.name} ${wish.time}-${wish.timeEnd}`);
+
+    const slots = await directGetBookableTimes(wish.fieldId);
+    if (slots.success && slots.code === 0 && slots.data) {
+      const days = Array.isArray(slots.data) ? slots.data : [];
+      const day = days.find(d => d.date === today) || days[0];
+      const ts = day?.timeSlots?.find(s => s.startTime === wish.time && s.bookable === true);
+      if (ts) {
+        log(`🎯 命中! ${wish.name} ${wish.time} ¥${ts.price || 15}`);
+        const order = await callDirectAPI('POST', '/venue/booking/orders/create', {
+          bookings: [{
+            venueId,
+            fieldId: wish.fieldId,
+            startTime: wish.time,
+            endTime: wish.timeEnd,
+            bookingDate: today,
+          }],
+          userId,
+          venueId,
+          couponId: '',
+        });
+        if (order.success && order.code === 0) {
+          log(`🎉🎉🎉 抢场成功! ${wish.name} ${wish.time}`);
+          log(`📋 订单号: ${order.data?.orderNo || '未知'}`);
+          booked = true;
+          break;
+        } else {
+          log(`❌ 下单失败: ${order.msg || '未知'}`);
+        }
+      } else {
+        const avail = day?.timeSlots?.filter(s => s.bookable).map(s => `${s.startTime}`).join(', ');
+        log(`⏳ ${wish.name} ${wish.time} 不可用${avail ? ' (可约: ' + avail + ')' : ''}`);
+      }
+    } else {
+      log(`⚠️ 查询失败: ${slots.msg || ''}`);
+    }
+  }
+
+  // === 扫荡模式 ===
+  if (!booked && cfg.fallbackEnabled !== false) {
+    log('♻️ 进入扫荡模式...');
+    for (const v of (cfg.fallbackVenues || [])) {
+      if (booked) break;
+      const slots = await directGetBookableTimes(v.fieldId);
+      if (slots.success && slots.code === 0 && slots.data) {
+        const days = Array.isArray(slots.data) ? slots.data : [];
+        const day = days.find(d => d.date === today) || days[0];
+        if (day?.timeSlots) {
+          for (const t of (cfg.fallbackTimes || [])) {
+            if (booked) break;
+            const ts = day.timeSlots.find(s => s.startTime === t.time && s.bookable === true);
+            if (ts) {
+              log(`🎯 扫荡到 ${v.name} ${t.time}!`);
+              const order = await callDirectAPI('POST', '/venue/booking/orders/create', {
+                bookings: [{
+                  venueId,
+                  fieldId: v.fieldId,
+                  startTime: t.time,
+                  endTime: t.timeEnd,
+                  bookingDate: today,
+                }],
+                userId,
+                venueId,
+                couponId: '',
+              });
+              if (order.success && order.code === 0) {
+                log(`🎉 捡漏成功! ${v.name} ${t.time}`);
+                booked = true;
+                break;
+              }
+              await sleep(50);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (booked) {
+    log('🎊🎊🎊 任务完成！');
+  } else {
+    log('😢 所有场地已满，明天再来');
+  }
+
+  _lastResult = { success: booked, time: new Date().toLocaleString('zh-CN') };
+  return _lastResult;
+}
+
+// ========== 主流程（自动选择模式） ==========
 async function main() {
+  // Linux/服务器环境：直接 API 模式，不启动浏览器
+  if (process.platform === 'linux') {
+    log('🖥️ 服务器模式（直接 API 调用）');
+    return directMain();
+  }
+
+  // Windows/桌面环境：使用浏览器引擎
   const engine = new BookingEngine();
 
   try {
