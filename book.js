@@ -671,6 +671,7 @@ async function directMain(opts = {}) {
   const userId = await directGetUserId();
   if (!userId) {
     log('⚠️ 无法获取用户 ID，预约接口可能需要 userId');
+  }
 
   const venueId = cfg.venueId || 1;
   const targetHour = cfg.targetHour ?? 8;
