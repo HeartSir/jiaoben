@@ -466,6 +466,10 @@ function startSelfWakeup(myPort) {
 
 // ========== 启动 ==========
 async function warmupPanelEngine() {
+  if (process.platform === 'linux') {
+    console.log('  ⚡ Linux 环境：使用直接 API 模式（跳过 Chromium）');
+    return;
+  }
   // 后台预启动面板引擎，让扫码/扫描功能开箱即用
   try {
     const { ensurePanelEngine } = require('./book.js');
@@ -505,6 +509,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`  📡 网络:   http://${lanIP}:${PORT}`);
     console.log(`  ⏰ 抢场:   每天 ${th}:${tm} 自动执行`);
     console.log(`  🎯 登录态: ${_authValid ? '✅ 有效' : '❌ 已过期'}`);
+    if (process.platform === 'linux') console.log(`  ⚡ 模式:   直接 API（跳过 Chromium）`);
     console.log(`  ───────────────────────────────`);
     console.log(`  💡 手机访问: 同一网络下打开 http://${lanIP}:${PORT}`);
     console.log(`  💡 全球访问: 需要公网 IP 或 frp/ngrok 隧道`);

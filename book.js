@@ -7,6 +7,7 @@
  */
 
 const { chromium } = require('playwright');
+const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 
@@ -73,6 +74,148 @@ function loadConfig() {
 function saveConfig(cfg) {
   try { fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true }); } catch(e) {}
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+// ========== 直接 API 调用（省内存，不需要浏览器） ==========
+// Render 512MB 跑不动 Chromium，直接用 JWT Token 调学校 API
+// 也适用于所有环境——比浏览器更快更稳
+
+function readToken() {
+  if (!fs.existsSync(AUTH_FILE)) return null;
+  try {
+    const auth = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+    for (const originUrl of ['https://cgzx.scu.edu.cn', 'http://cgzx.scu.edu.cn']) {
+      const o = auth.origins?.find(x => x.origin === originUrl);
+      const token = o?.localStorage?.find(l => l.name === 'accessToken')?.value;
+      if (token) return token;
+    }
+  } catch(e) {}
+  return null;
+}
+
+function readRefreshToken() {
+  if (!fs.existsSync(AUTH_FILE)) return null;
+  try {
+    const auth = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+    for (const originUrl of ['https://cgzx.scu.edu.cn', 'http://cgzx.scu.edu.cn']) {
+      const o = auth.origins?.find(x => x.origin === originUrl);
+      const rt = o?.localStorage?.find(l => l.name === 'refreshToken')?.value;
+      if (rt) return rt;
+    }
+  } catch(e) {}
+  return null;
+}
+
+function saveToken(token, refreshToken) {
+  try {
+    if (!fs.existsSync(AUTH_FILE)) return;
+    const auth = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+    for (const originUrl of ['http://cgzx.scu.edu.cn', 'https://cgzx.scu.edu.cn']) {
+      let origin = auth.origins?.find(o => o.origin === originUrl);
+      if (!origin) {
+        if (!auth.origins) auth.origins = [];
+        origin = { origin: originUrl, localStorage: [] };
+        auth.origins.push(origin);
+      }
+      let item = origin.localStorage.find(l => l.name === 'accessToken');
+      if (item) item.value = token;
+      else origin.localStorage.push({ name: 'accessToken', value: token });
+      if (refreshToken) {
+        let rt = origin.localStorage.find(l => l.name === 'refreshToken');
+        if (rt) rt.value = refreshToken;
+        else origin.localStorage.push({ name: 'refreshToken', value: refreshToken });
+      }
+    }
+    fs.writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2));
+  } catch(e) {}
+}
+
+// 尝试多种鉴权头格式
+function makeAuthHeaders(token) {
+  // 标准 Bearer 优先，同时尝试其他常见格式
+  return [
+    { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  ];
+}
+
+async function callDirectAPI(method, apiPath, data) {
+  const token = readToken();
+  if (!token) return { success: false, code: -1, msg: '未登录', data: null };
+
+  const headers = makeAuthHeaders(token);
+  let lastErr = null;
+
+  for (const h of headers) {
+    try {
+      const res = await axios({
+        method,
+        url: `https://cgzx.scu.edu.cn/app-api${apiPath}`,
+        headers: h,
+        data: data || undefined,
+        timeout: 15000,
+        validateStatus: () => true,
+      });
+
+      const body = res.data;
+      if (body && typeof body === 'object') {
+        // 鉴权失败，试下一种格式
+        if (res.status === 401 || body.code === 401 || body.msg?.includes('未登录') || body.msg?.includes('token')) {
+          lastErr = { success: false, code: 401, msg: body.msg || '鉴权失败', data: null };
+          continue;
+        }
+        return { success: true, code: body.code ?? 0, msg: body.msg || '', data: body.data };
+      }
+      return { success: true, code: 0, msg: '', data: body };
+    } catch (err) {
+      lastErr = { success: false, code: -1, msg: err.code === 'ECONNABORTED' ? '请求超时' : err.message, data: null };
+    }
+  }
+  return lastErr;
+}
+
+async function directRefreshToken() {
+  const rt = readRefreshToken();
+  if (!rt) return false;
+  const result = await callDirectAPI('POST', '/member/auth/refresh-token', { refreshToken: rt });
+  if (result.success && result.code === 0 && result.data?.accessToken) {
+    log('✅ Token 已刷新');
+    saveToken(result.data.accessToken, result.data.refreshToken);
+    return true;
+  }
+  return false;
+}
+
+async function directGetBookableTimes(fieldId) {
+  return callDirectAPI('GET', `/venue/field/get-bookable-times/${fieldId}`);
+}
+
+async function directGetUserId() {
+  try {
+    const auth = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+    for (const originUrl of ['http://cgzx.scu.edu.cn', 'https://cgzx.scu.edu.cn']) {
+      const origin = auth.origins?.find(o => o.origin === originUrl);
+      const raw = origin?.localStorage?.find(l => l.name === 'userInfo')?.value;
+      if (raw) {
+        const info = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch(e) { return null; } })() : raw;
+        if (info) {
+          if (info.data?.userId) return info.data.userId;
+          if (info.userId) return info.userId;
+        }
+      }
+    }
+  } catch(e) {}
+  return null;
+}
+
+function isTokenExpired() {
+  const token = readToken();
+  if (!token) return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    return payload.exp ? payload.exp * 1000 < Date.now() : false;
+  } catch(e) { return false; }
 }
 
 // ========== 引擎 ==========
@@ -669,6 +812,15 @@ let _panelEngine = null;
 let _panelEnginePromise = null;
 
 async function _ensurePanelEngine() {
+  // 🚫 Linux/Render 环境用直接 API 调取代，不启动浏览器（512MB 内存不够）
+  if (process.platform === 'linux') {
+    if (!_panelEnginePromise) {
+      _panelEnginePromise = Promise.resolve(false);
+      setTimeout(() => { _panelEnginePromise = null; }, 1000);
+    }
+    return false;
+  }
+
   // 🔑 如果引擎正在启动中，等待它完成而不是直接返回 false
   if (_panelEnginePromise) {
     log('⏳ 面板引擎正在启动，等待中...');
@@ -708,35 +860,37 @@ async function _ensurePanelEngine() {
 }
 
 async function scanAvailableSlots() {
-  // 确保引擎运行中
-  if (!_panelEngine || !_panelEngine.page) {
-    const ok = await _ensurePanelEngine();
-    if (!ok) return { success: false, error: '引擎启动失败，请先扫码登录' };
-  }
-
-  // 重新加载最新配置
   const cfg = loadConfig();
   if (!cfg) return { success: false, error: '未找到配置' };
 
   const venueId = cfg.venueId || 1;
   const today = new Date().toISOString().split('T')[0];
 
-  // 获取场地列表（硬编码优先，动态提取兜底）
+  // 获取场地列表（硬编码优先）
   let fields = getFieldsForVenue(venueId);
   if (!fields || fields.length === 0) {
-    log(`📡 未找到场馆 #${venueId} 的硬编码场地，尝试去页面提取...`);
+    log(`📡 未找到场馆 #${venueId} 的硬编码场地，尝试动态获取...`);
     fields = await discoverVenueFields(venueId);
   }
   if (!fields || fields.length === 0) {
     return { success: false, error: '未能获取该场馆的场地列表，该场馆暂不支持扫描功能' };
   }
 
-  const slots = [];
+  // 检查 Token 是否过期
+  if (isTokenExpired()) {
+    log('🔄 Token 已过期，尝试刷新...');
+    const refreshed = await directRefreshToken();
+    if (!refreshed) {
+      return { success: false, error: '登录已过期，请重新粘贴 Token' };
+    }
+  }
 
-  log(`📡 开始扫描 ${fields.length} 个场地...`);
+  const slots = [];
+  log(`📡 直接 API 扫描 ${fields.length} 个场地...`);
+
   for (const field of fields) {
     try {
-      const result = await _panelEngine.getBookableTimes(field.id);
+      const result = await directGetBookableTimes(field.id);
       if (result.success && result.code === 0 && result.data) {
         const days = Array.isArray(result.data) ? result.data : [];
         const day = days.find(d => d.date === today) || days[0];
@@ -769,7 +923,28 @@ async function discoverVenueFields(venueId) {
   const hardcoded = getFieldsForVenue(venueId);
   if (hardcoded.length > 0) return hardcoded;
 
-  // 用面板引擎去学校页面提取（前提：已登录）
+  // 用直接 API 调用来获取场地列表（不需要浏览器）
+  log(`📡 尝试直接 API 获取场地...`);
+  const apiPatterns = [
+    `/venue/field/list?venueId=${venueId}`,
+    `/venue/field/list-by-venue-id/${venueId}`,
+    `/venue/field/page?venueId=${venueId}&pageSize=100`,
+  ];
+  for (const path of apiPatterns) {
+    const result = await callDirectAPI('GET', path);
+    if (result.success && result.code === 0 && result.data) {
+      const raw = Array.isArray(result.data)
+        ? result.data
+        : result.data.records || result.data.list || result.data.items || [];
+      if (raw.length > 0) {
+        const fields = raw.map(f => ({ id: f.id, name: f.name || `#${f.id}` }));
+        log(`📋 直接 API 获取到 ${fields.length} 个场地`);
+        return fields;
+      }
+    }
+  }
+
+  // 有浏览器引擎再用它兜底（Windows 桌面环境）
   if (_panelEngine && _panelEngine.page) {
     try {
       const discovered = await _panelEngine.discoverFields(venueId);
@@ -779,39 +954,66 @@ async function discoverVenueFields(venueId) {
     }
   }
 
-  // 先尝试启动引擎
-  const ok = await _ensurePanelEngine();
-  if (ok && _panelEngine?.page) {
-    try {
-      const discovered = await _panelEngine.discoverFields(venueId);
-      if (discovered && discovered.length > 0) return discovered;
-    } catch (e) {
-      log(`⚠️ 动态获取场地失败: ${e.message}`);
-    }
-  }
-
-  // 都失败了，返回空（用户需要先登录，或该场馆暂时不支持）
+  // 都失败了，返回空
   log(`⚠️ 无法获取场馆 #${venueId} 的场地列表`);
   return [];
 }
 
 async function quickBookSlot(fieldId, fieldName, startTime, endTime) {
-  if (!_panelEngine || !_panelEngine.page) {
-    const ok = await _ensurePanelEngine();
-    if (!ok) return { success: false, error: '引擎未就绪，请先扫码登录' };
+  const cfg = loadConfig();
+  const venueId = cfg?.venueId || 1;
+  const today = new Date().toISOString().split('T')[0];
+
+  // 检查 Token
+  if (isTokenExpired()) {
+    log('🔄 Token 已过期，尝试刷新...');
+    const refreshed = await directRefreshToken();
+    if (!refreshed) {
+      return { success: false, error: '登录已过期，请重新粘贴 Token' };
+    }
   }
 
-  const today = new Date().toISOString().split('T')[0];
-  log(`📋 快速预约 ${fieldName} ${startTime}-${endTime}...`);
-  const result = await _panelEngine.createOrder(fieldId, startTime, endTime, today);
+  // 获取 userId
+  let userId = directGetUserId();
+  if (!userId) {
+    // 如果 auth 文件里没有 userInfo，从 API 获取
+    log('📡 获取用户信息...');
+    const userRes = await callDirectAPI('GET', '/member/user/get');
+    if (userRes.success && userRes.code === 0 && userRes.data?.userId) {
+      userId = userRes.data.userId;
+    }
+  }
+  if (!userId) {
+    return { success: false, error: '无法获取用户信息，请重新登录' };
+  }
 
-  if (result.success && result.code === 0) {
-    const orderNo = result.data?.orderNo || '未知';
-    log(`🎉 预约成功! ${fieldName} ${startTime} 订单: ${orderNo}`);
-    return { success: true, orderNo };
-  } else {
-    log(`❌ 预约失败: ${result.msg || '未知错误'}`);
-    return { success: false, error: result.msg || '预约失败' };
+  log(`📋 直接预约 ${fieldName} ${startTime}-${endTime}...`);
+
+  try {
+    const result = await callDirectAPI('POST', '/venue/booking/orders/create', {
+      bookings: [{
+        venueId,
+        fieldId,
+        startTime,
+        endTime,
+        bookingDate: today,
+      }],
+      userId,
+      venueId,
+      couponId: '',
+    });
+
+    if (result.success && result.code === 0) {
+      const orderNo = result.data?.orderNo || '未知';
+      log(`🎉 预约成功! ${fieldName} ${startTime} 订单: ${orderNo}`);
+      return { success: true, orderNo };
+    } else {
+      log(`❌ 预约失败: ${result.msg || '未知错误'}`);
+      return { success: false, error: result.msg || '预约失败' };
+    }
+  } catch (e) {
+    log(`❌ 预约失败: ${e.message}`);
+    return { success: false, error: e.message };
   }
 }
 
