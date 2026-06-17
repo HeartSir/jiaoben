@@ -3,3 +3,9 @@ dist/
 build/
 .venue-auth.json
 venue-booking-debug.log
+
+# Build outputs
+desktop-ui/bin/
+desktop-ui/obj/
+desktop-ui/publish-single/
+archive/
