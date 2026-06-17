@@ -10,17 +10,11 @@
 services:
   - type: web
     name: venue-booking
-    runtime: node
+    runtime: docker
     repo: https://github.com/HeartSir/jiaoben
-    region: singapore  # 东南亚节点，访问川大系统更快
+    region: singapore
     plan: free
-    buildCommand: apt-get update -qq && apt-get install -y -qq libnss3 libnspr4 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2 libxshmfence1 2>/dev/null && npm install && npx playwright install chromium
-    startCommand: node dashboard.js
     healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: "3456"
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: /opt/render/.cache/ms-playwright
       - key: DASHBOARD_PASSWORD
-        sync: false  # 部署后在 Render 面板手动设置
+        sync: false
