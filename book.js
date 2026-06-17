@@ -132,17 +132,29 @@ function saveToken(token, refreshToken) {
 
 // 尝试多种鉴权头格式
 function makeAuthHeaders(token) {
-  // 标准 Bearer 优先，同时尝试其他常见格式
-  return [
-    { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  // 打印 Token 格式（仅前几个字符）
+  log(`🔑 Token 格式: ${token.substring(0, 20)}... 长度=${token.length} 点号=${(token.match(/\./g)||[]).length}`);
+
+  // 尝试各种可能的鉴权格式
+  const formats = [
+    { 'Authorization': `Bearer ${token}` },
+    { 'Authorization': token },
+    { 'x-access-token': token },
+    { 'Ticket': token },
+    { 'token': token },
+    { 'accessToken': token },
   ];
+
+  const withContentType = formats.map(h => ({ ...h, 'Content-Type': 'application/json' }));
+  return withContentType;
 }
 
 async function callDirectAPI(method, apiPath, data) {
   const token = readToken();
   if (!token) return { success: false, code: -1, msg: '未登录', data: null };
 
-  const headers = makeAuthHeaders(token);
+  // 如果是刷新token接口，尝试使用refreshToken
+  let headers = makeAuthHeaders(token);
   let lastErr = null;
 
   for (const h of headers) {
@@ -321,13 +333,20 @@ class BookingEngine {
         '--disable-setuid-sandbox',
         '--disable-gpu',
         '--disable-software-rasterizer',
-        '--disable-dev-shm-usage',       // Docker 容器共享内存不足的问题
-        '--single-process',              // 减少内存占用
+        '--disable-dev-shm-usage',
+        '--single-process',
         '--disable-extensions',
         '--disable-component-extensions-with-background-pages',
         '--disable-background-networking',
         '--disable-sync',
         '--no-zygote',
+        '--disable-features=site-per-process',
+        '--js-flags=--max-old-space-size=128,--expose-gc',
+        '--disable-component-update',
+        '--no-first-run',
+        '--disable-default-apps',
+        '--mute-audio',
+        '--disable-background-timer-throttling',
       ],
     };
 
@@ -380,16 +399,29 @@ class BookingEngine {
     });
     this.page = await context.newPage();
 
+    // 🚫 拦截所有非必要资源（图片、字体、CSS），省内存
+    await this.page.route('**/*', (route) => {
+      const type = route.request().resourceType();
+      if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
+
     log('📡 加载 uni-app 环境...');
     try {
       await this.page.goto('https://cgzx.scu.edu.cn/venue/', {
-        waitUntil: 'domcontentloaded', timeout: 25000
+        waitUntil: 'domcontentloaded', timeout: 20000
       });
       await sleep(3000);
     } catch(e) {
       log(`⚠️ 页面加载超时，尝试继续...`);
       await sleep(2000);
     }
+
+    // 触发 GC 回收内存
+    try { await this.page.evaluate(() => { if (globalThis.gc) globalThis.gc(); }); } catch(_) {}
 
     // 注入 token
     const token = this.getToken();
@@ -803,135 +835,136 @@ async function directMain(opts = {}) {
 
 // ========== 主流程（自动选择模式） ==========
 async function main(opts = {}) {
-  // Linux/服务器环境：直接 API 模式，不启动浏览器
-  if (process.platform === 'linux') {
-    log('🖥️ 服务器模式（直接 API 调用）');
-    return directMain(opts);
-  }
-
-  // Windows/桌面环境：使用浏览器引擎
+  // 先尝试用浏览器引擎
   const engine = new BookingEngine();
 
   try {
     const ok = await engine.start();
-    if (!ok) {
-      log('❌ 引擎启动失败');
+    if (ok) {
+      const result = await engineRun(engine, opts);
       await engine.close();
-      return { success: false, reason: '引擎启动失败' };
+      return result;
     }
+  } catch(e) {
+    log(`⚠️ 浏览器引擎启动失败: ${e.message}`);
+    await engine.close().catch(() => {});
+  }
 
-    const cfg = engine.config;
-    if (!cfg) {
-      log('❌ 未找到 config.json');
-      await engine.close();
-      return { success: false, reason: '无配置文件' };
+  // 浏览器引擎失败，用直接 API（Linux/Render 兜底）
+  if (process.platform === 'linux') {
+    log('🖥️ 降级到直接 API 模式');
+    return directMain(opts);
+  }
+
+  _lastResult = { success: false, error: '浏览器引擎启动失败' };
+  return _lastResult;
+}
+
+// ========== 浏览器引擎抢场逻辑 ==========
+async function engineRun(engine, opts = {}) {
+  const cfg = engine.config;
+  if (!cfg) {
+    log('❌ 未找到 config.json');
+    return { success: false, reason: '无配置文件' };
+  }
+
+  const targetHour = cfg.targetHour ?? 8;
+  const targetMinute = cfg.targetMinute ?? 30;
+  const targetSecond = cfg.targetSecond ?? 0;
+  const preWakeMs = cfg.preWakeMs ?? 120000;
+
+  // 计算等待时间
+  const now = new Date();
+  const target = new Date();
+  target.setHours(targetHour, targetMinute, targetSecond, 0);
+  if (target <= now) target.setDate(target.getDate() + 1);
+
+  const wakeTime = target.getTime() - preWakeMs;
+  if (!opts.skipWait && now.getTime() < wakeTime) {
+    const sec = Math.round((wakeTime - now.getTime()) / 1000);
+    log(`⏳ 等待到 ${targetHour}:${String(targetMinute).padStart(2,'0')} (${sec}秒后)`);
+    await sleep(wakeTime - Date.now());
+  }
+
+  // 精准等待到目标秒
+  const exact = target.getTime();
+  while (Date.now() < exact - 30) await sleep(10);
+  while (Date.now() < exact) { /* busy wait */ }
+
+  log(`⚡⚡⚡ 猎杀时刻! ${new Date().toLocaleTimeString()} ⚡⚡⚡`);
+
+  let booked = false;
+  const today = new Date().toISOString().split('T')[0];
+
+  // === 按优先级依次尝试值班 ===
+  const wishes = (cfg.wishes || []).filter(w => w.enabled !== false);
+  for (let i = 0; i < wishes.length; i++) {
+    if (booked) break;
+    const wish = wishes[i];
+    log(`🎯 [第${i+1}志愿] ${wish.name} ${wish.time}-${wish.timeEnd}`);
+
+    const slots = await engine.getBookableTimes(wish.fieldId);
+    if (slots.success && slots.code === 0 && slots.data) {
+      const days = Array.isArray(slots.data) ? slots.data : [];
+      const day = days.find(d => d.date === today) || days[0];
+      const ts = day?.timeSlots?.find(s => s.startTime === wish.time && s.bookable === true);
+      if (ts) {
+        log(`🎯 命中! ${wish.name} ${wish.time} ¥${ts.price || 15}`);
+        const order = await engine.createOrder(wish.fieldId, wish.time, wish.timeEnd, today);
+        if (order.success && order.code === 0) {
+          log(`🎉🎉🎉 抢场成功! ${wish.name} ${wish.time}`);
+          log(`📋 订单号: ${order.data?.orderNo || '未知'}`);
+          booked = true;
+          break;
+        } else {
+          log(`❌ 下单失败: ${order.msg || '未知'}`);
+        }
+      } else {
+        const avail = day?.timeSlots?.filter(s => s.bookable).map(s => `${s.startTime}`).join(', ');
+        log(`⏳ ${wish.name} ${wish.time} 不可用${avail ? ' (可约: ' + avail + ')' : ''}`);
+      }
+    } else {
+      log(`⚠️ 查询失败: ${slots.msg || ''}`);
     }
+  }
 
-    const targetHour = cfg.targetHour ?? 8;
-    const targetMinute = cfg.targetMinute ?? 30;
-    const targetSecond = cfg.targetSecond ?? 0;
-    const preWakeMs = cfg.preWakeMs ?? 120000;
-
-    // 计算等待时间
-    const now = new Date();
-    const target = new Date();
-    target.setHours(targetHour, targetMinute, targetSecond, 0);
-    if (target <= now) target.setDate(target.getDate() + 1);
-
-    const wakeTime = target.getTime() - preWakeMs;
-    if (now.getTime() < wakeTime) {
-      const sec = Math.round((wakeTime - now.getTime()) / 1000);
-      log(`⏳ 等待到 ${targetHour}:${String(targetMinute).padStart(2,'0')} (${sec}秒后)`);
-      await sleep(wakeTime - Date.now());
-    }
-
-    // 精准等待到目标秒
-    const exact = target.getTime();
-    while (Date.now() < exact - 30) await sleep(10);
-    while (Date.now() < exact) { /* busy wait */ }
-
-    log(`⚡⚡⚡ 猎杀时刻! ${new Date().toLocaleTimeString()} ⚡⚡⚡`);
-
-    let booked = false;
-    const today = new Date().toISOString().split('T')[0];
-
-    // === 按优先级依次尝试值班 ===
-    const wishes = (cfg.wishes || []).filter(w => w.enabled !== false);
-    for (let i = 0; i < wishes.length; i++) {
+  // === 扫荡模式 ===
+  if (!booked && cfg.fallbackEnabled !== false) {
+    log('♻️ 进入扫荡模式...');
+    for (const v of (cfg.fallbackVenues || [])) {
       if (booked) break;
-      const wish = wishes[i];
-      log(`🎯 [第${i+1}志愿] ${wish.name} ${wish.time}-${wish.timeEnd}`);
-
-      const slots = await engine.getBookableTimes(wish.fieldId);
+      const slots = await engine.getBookableTimes(v.fieldId);
       if (slots.success && slots.code === 0 && slots.data) {
         const days = Array.isArray(slots.data) ? slots.data : [];
         const day = days.find(d => d.date === today) || days[0];
-        const ts = day?.timeSlots?.find(s => s.startTime === wish.time && s.bookable === true);
-        if (ts) {
-          log(`🎯 命中! ${wish.name} ${wish.time} ¥${ts.price || 15}`);
-          const order = await engine.createOrder(wish.fieldId, wish.time, wish.timeEnd, today);
-          if (order.success && order.code === 0) {
-            log(`🎉🎉🎉 抢场成功! ${wish.name} ${wish.time}`);
-            log(`📋 订单号: ${order.data?.orderNo || '未知'}`);
-            booked = true;
-            break;
-          } else {
-            log(`❌ 下单失败: ${order.msg || '未知'}`);
-          }
-        } else {
-          const avail = day?.timeSlots?.filter(s => s.bookable).map(s => `${s.startTime}`).join(', ');
-          log(`⏳ ${wish.name} ${wish.time} 不可用${avail ? ' (可约: ' + avail + ')' : ''}`);
-        }
-      } else {
-        log(`⚠️ 查询失败: ${slots.msg || ''}`);
-      }
-    }
-
-    // === 扫荡模式 ===
-    if (!booked && cfg.fallbackEnabled !== false) {
-      log('♻️ 进入扫荡模式...');
-      for (const v of (cfg.fallbackVenues || [])) {
-        if (booked) break;
-        const slots = await engine.getBookableTimes(v.fieldId);
-        if (slots.success && slots.code === 0 && slots.data) {
-          const days = Array.isArray(slots.data) ? slots.data : [];
-          const day = days.find(d => d.date === today) || days[0];
-          if (day?.timeSlots) {
-            for (const t of (cfg.fallbackTimes || [])) {
-              if (booked) break;
-              const ts = day.timeSlots.find(s => s.startTime === t.time && s.bookable === true);
-              if (ts) {
-                log(`🎯 扫荡到 ${v.name} ${t.time}!`);
-                const order = await engine.createOrder(v.fieldId, t.time, t.timeEnd, today);
-                if (order.success && order.code === 0) {
-                  log(`🎉 捡漏成功! ${v.name} ${t.time}`);
-                  booked = true;
-                  break;
-                }
-                await sleep(50);
+        if (day?.timeSlots) {
+          for (const t of (cfg.fallbackTimes || [])) {
+            if (booked) break;
+            const ts = day.timeSlots.find(s => s.startTime === t.time && s.bookable === true);
+            if (ts) {
+              log(`🎯 扫荡到 ${v.name} ${t.time}!`);
+              const order = await engine.createOrder(v.fieldId, t.time, t.timeEnd, today);
+              if (order.success && order.code === 0) {
+                log(`🎉 捡漏成功! ${v.name} ${t.time}`);
+                booked = true;
+                break;
               }
+              await sleep(50);
             }
           }
         }
       }
     }
-
-    if (booked) {
-      log('🎊🎊🎊 任务完成！');
-    } else {
-      log('😢 所有场地已满，明天再来');
-    }
-
-    await engine.close();
-    _lastResult = { success: booked, time: new Date().toLocaleString('zh-CN') };
-    return _lastResult;
-
-  } catch (err) {
-    log(`❌ 错误: ${err.message}`);
-    await engine.close();
-    _lastResult = { success: false, error: err.message, time: new Date().toLocaleString('zh-CN') };
-    return _lastResult;
   }
+
+  if (booked) {
+    log('🎊🎊🎊 任务完成！');
+  } else {
+    log('😢 所有场地已满，明天再来');
+  }
+
+  _lastResult = { success: booked, time: new Date().toLocaleString('zh-CN') };
+  return _lastResult;
 }
 
 // ========== 场馆-场地映射（用于扫描功能） ==========
@@ -985,15 +1018,6 @@ let _panelEngine = null;
 let _panelEnginePromise = null;
 
 async function _ensurePanelEngine() {
-  // 🚫 Linux/Render 环境用直接 API 调取代，不启动浏览器（512MB 内存不够）
-  if (process.platform === 'linux') {
-    if (!_panelEnginePromise) {
-      _panelEnginePromise = Promise.resolve(false);
-      setTimeout(() => { _panelEnginePromise = null; }, 1000);
-    }
-    return false;
-  }
-
   // 🔑 如果引擎正在启动中，等待它完成而不是直接返回 false
   if (_panelEnginePromise) {
     log('⏳ 面板引擎正在启动，等待中...');
@@ -1058,36 +1082,70 @@ async function scanAvailableSlots() {
     }
   }
 
-  const slots = [];
-  log(`📡 直接 API 扫描 ${fields.length} 个场地...`);
+  // 尝试确保浏览器引擎可用
+  if (!_panelEngine || !_panelEngine.page) {
+    log('🔄 尝试启动浏览器引擎...');
+    await _ensurePanelEngine();
+  }
 
-  let firstField = true;
-  for (const field of fields) {
-    try {
-      const result = await directGetBookableTimes(field.id);
-      const success = result.success && result.code === 0 && result.data;
-      if (firstField) { firstField = false; log(`📡 ${field.name} API: code=${result.code} success=${result.success} data=${!!result.data}`); if (result.msg) log(`  响应: ${result.msg}`); }
-      if (success) {
-        const days = Array.isArray(result.data) ? result.data : [];
-        const day = days.find(d => d.date === today) || days[0];
-        if (day?.timeSlots) {
-          for (const ts of day.timeSlots) {
-            if (ts.bookable === true) {
-              slots.push({
-                fieldId: field.id,
-                fieldName: field.name,
-                startTime: ts.startTime,
-                endTime: ts.endTime || computeEndTime(ts.startTime),
-                price: ts.price || 15,
-              });
+  const slots = [];
+
+  if (_panelEngine && _panelEngine.page) {
+    // 🚀 浏览器引擎就绪，走 uni.$u.http 加密通道
+    log(`📡 浏览器引擎扫描 ${fields.length} 个场地...`);
+    for (const field of fields) {
+      try {
+        const result = await _panelEngine.getBookableTimes(field.id);
+        if (result.success && result.code === 0 && result.data) {
+          const days = Array.isArray(result.data) ? result.data : [];
+          const day = days.find(d => d.date === today) || days[0];
+          if (day?.timeSlots) {
+            for (const ts of day.timeSlots) {
+              if (ts.bookable === true) {
+                slots.push({
+                  fieldId: field.id,
+                  fieldName: field.name,
+                  startTime: ts.startTime,
+                  endTime: ts.endTime || computeEndTime(ts.startTime),
+                  price: ts.price || 15,
+                });
+              }
             }
           }
         }
+      } catch (e) {
+        log(`⚠️ 查询 ${field.name} 失败: ${e.message}`);
       }
-    } catch (e) {
-      log(`⚠️ 查询 ${field.name} 失败: ${e.message}`);
+      await sleep(50);
     }
-    await sleep(50);
+  } else {
+    // ⚠️ 降级到直接 API（可能不支持加密导致 401）
+    log(`📡 降级到直接 API 扫描 ${fields.length} 个场地...`);
+    for (const field of fields) {
+      try {
+        const result = await directGetBookableTimes(field.id);
+        if (result.success && result.code === 0 && result.data) {
+          const days = Array.isArray(result.data) ? result.data : [];
+          const day = days.find(d => d.date === today) || days[0];
+          if (day?.timeSlots) {
+            for (const ts of day.timeSlots) {
+              if (ts.bookable === true) {
+                slots.push({
+                  fieldId: field.id,
+                  fieldName: field.name,
+                  startTime: ts.startTime,
+                  endTime: ts.endTime || computeEndTime(ts.startTime),
+                  price: ts.price || 15,
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        log(`⚠️ 查询 ${field.name} 失败: ${e.message}`);
+      }
+      await sleep(50);
+    }
   }
 
   log(`📊 扫描完成，共 ${slots.length} 个可用时段`);
@@ -1149,21 +1207,32 @@ async function quickBookSlot(fieldId, fieldName, startTime, endTime) {
     }
   }
 
-  // 获取 userId
-  let userId = directGetUserId();
-  if (!userId) {
-    // 如果 auth 文件里没有 userInfo，从 API 获取
-    log('📡 获取用户信息...');
-    const userRes = await callDirectAPI('GET', '/member/user/get');
-    if (userRes.success && userRes.code === 0 && userRes.data?.userId) {
-      userId = userRes.data.userId;
-    }
-  }
-  if (!userId) {
-    return { success: false, error: '无法获取用户信息，请重新登录' };
+  // 先尝试用浏览器引擎预约（走 uni.$u.http 加密通道）
+  if (!_panelEngine || !_panelEngine.page) {
+    log('🔄 尝试启动浏览器引擎...');
+    await _ensurePanelEngine();
   }
 
-  log(`📋 直接预约 ${fieldName} ${startTime}-${endTime}...`);
+  if (_panelEngine && _panelEngine.page) {
+    log(`📋 浏览器引擎预约 ${fieldName} ${startTime}-${endTime}...`);
+    try {
+      const result = await _panelEngine.createOrder(fieldId, startTime, endTime, today);
+      if (result.success && result.code === 0) {
+        const orderNo = result.data?.orderNo || '未知';
+        log(`🎉 预约成功! ${fieldName} ${startTime} 订单: ${orderNo}`);
+        return { success: true, orderNo };
+      } else {
+        log(`❌ 预约失败: ${result.msg || '未知错误'}`);
+        return { success: false, error: result.msg || '预约失败' };
+      }
+    } catch (e) {
+      log(`⚠️ 浏览器预约失败: ${e.message}，尝试降级...`);
+    }
+  }
+
+  // ⚠️ 降级到直接 API
+  const userId = await directGetUserId();
+  log(`📋 直接 API 预约 ${fieldName} ${startTime}-${endTime}...`);
 
   try {
     const result = await callDirectAPI('POST', '/venue/booking/orders/create', {
