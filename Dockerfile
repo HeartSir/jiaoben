@@ -9,6 +9,9 @@ RUN apt-get update -qq && apt-get install -y -qq \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
+# 创建 swap 文件（弥补 512MB 内存不足）
+RUN fallocate -l 512M /swapfile && chmod 0600 /swapfile && mkswap /swapfile
+
 WORKDIR /app
 
 # 装 Node 依赖
@@ -27,4 +30,5 @@ ENV RENDER_DATA_DIR=/data
 
 EXPOSE 3456
 
-CMD ["node", "dashboard.js"]
+# 启动时启用 swap，再启动服务
+CMD bash -c "swapon /swapfile 2>/dev/null; node dashboard.js"
