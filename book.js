@@ -152,7 +152,7 @@ async function callDirectAPI(method, apiPath, data) {
         url: `https://cgzx.scu.edu.cn/app-api${apiPath}`,
         headers: h,
         data: data || undefined,
-        timeout: 15000,
+        timeout: 30000,
         validateStatus: () => true,
       });
 
@@ -190,6 +190,7 @@ async function directGetBookableTimes(fieldId) {
 }
 
 async function directGetUserId() {
+  // 方法1: 从保存的 userInfo 读取
   try {
     const auth = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
     for (const originUrl of ['http://cgzx.scu.edu.cn', 'https://cgzx.scu.edu.cn']) {
@@ -204,6 +205,18 @@ async function directGetUserId() {
       }
     }
   } catch(e) {}
+
+  // 方法2: 从 JWT payload 提取
+  try {
+    const token = readToken();
+    if (!token) return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    // 常见字段名：userId, id, sub, user_id
+    return payload.userId || payload.id || payload.sub || payload.user_id || null;
+  } catch(e) {}
+
   return null;
 }
 
@@ -654,15 +667,10 @@ async function directMain(opts = {}) {
     }
   }
 
-  // 获取 userId
-  let userId = await directGetUserId();
+  // 获取 userId（从 auth 文件或 JWT payload）
+  const userId = await directGetUserId();
   if (!userId) {
-    log('📡 获取用户信息...');
-    const userRes = await callDirectAPI('GET', '/member/user/get');
-    if (userRes.success && userRes.code === 0 && userRes.data?.userId) {
-      userId = userRes.data.userId;
-    }
-  }
+    log('⚠️ 无法获取用户 ID，预约接口可能需要 userId');
 
   const venueId = cfg.venueId || 1;
   const targetHour = cfg.targetHour ?? 8;
