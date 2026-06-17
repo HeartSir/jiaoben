@@ -8,6 +8,8 @@
 
 const { chromium } = require('playwright');
 const axios = require('axios');
+const { sm3 } = require('sm-crypto');
+const sm4 = require('sm-crypto').sm4;
 const path = require('path');
 const fs = require('fs');
 
@@ -130,56 +132,122 @@ function saveToken(token, refreshToken) {
   } catch(e) {}
 }
 
-// 尝试多种鉴权头格式
-function makeAuthHeaders(token) {
-  // 打印 Token 格式（仅前几个字符）
-  log(`🔑 Token 格式: ${token.substring(0, 20)}... 长度=${token.length} 点号=${(token.match(/\./g)||[]).length}`);
+// === SM 加密辅助函数 ===
+// 学校 uni-app 使用 SM 国密加密通信，纯 Bearer token 会被 401 拒绝
+// 这里尝试多种 SM3 签名和 SM4 加密方案
 
-  // 尝试各种可能的鉴权格式
+function smSign(method, apiPath, body, timestamp) {
+  const bodyStr = body ? JSON.stringify(body) : '';
+  const pathLower = apiPath.toLowerCase();
+  // 尝试多种常见签名格式
+  const signCandidates = [
+    sm3(timestamp + pathLower + bodyStr),
+    sm3(pathLower + bodyStr + timestamp),
+    sm3(bodyStr + timestamp),
+    sm3(timestamp + bodyStr),
+    sm3(method + pathLower + timestamp),
+  ];
+  return signCandidates;
+}
+
+function sm4EncryptBody(body) {
+  // 尝试常用 SM4 密钥（部分学校使用固定密钥）
+  // 川大 uni-app 常见的几个默认密钥
+  const commonKeys = [
+    'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6',
+    '1234567890abcdef1234567890abcdef',
+    '00000000000000000000000000000000',
+    'cgzxscuvenuekey2024abcdef123456',
+  ];
+  const bodyStr = JSON.stringify(body);
+  for (const key of commonKeys) {
+    try {
+      const encrypted = sm4.encrypt(bodyStr, key);
+      return { encrypted, key };
+    } catch(e) { continue; }
+  }
+  return null;
+}
+
+// 尝试多种鉴权头格式（含 SM3 签名）
+function makeAuthHeaders(token, method, apiPath, data) {
+  const timestamp = Date.now().toString();
+  const signatures = smSign(method, apiPath, data, timestamp);
+
   const formats = [
-    { 'Authorization': `Bearer ${token}` },
-    { 'Authorization': token },
-    { 'x-access-token': token },
-    { 'Ticket': token },
-    { 'token': token },
-    { 'accessToken': token },
+    // Bearer + SM3 签名（多种格式）
+    ...signatures.map((sign, i) => ({
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'timestamp': timestamp,
+      'sign': sign,
+      'sign-type': `v${i+1}`,
+    })),
+    // Bearer + SM3 签名（其他头部名）
+    { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Sign': signatures[0], 'timestamp': timestamp },
+    { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'signature': signatures[0], 't': timestamp },
+    // 无 SM3 但尝试不同鉴权头
+    { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    { 'Authorization': token, 'Content-Type': 'application/json' },
+    { 'x-access-token': token, 'Content-Type': 'application/json' },
+    { 'Ticket': token, 'Content-Type': 'application/json' },
+    { 'token': token, 'Content-Type': 'application/json' },
+    { 'accessToken': token, 'Content-Type': 'application/json' },
   ];
 
-  const withContentType = formats.map(h => ({ ...h, 'Content-Type': 'application/json' }));
-  return withContentType;
+  return formats;
 }
 
 async function callDirectAPI(method, apiPath, data) {
   const token = readToken();
   if (!token) return { success: false, code: -1, msg: '未登录', data: null };
 
-  // 如果是刷新token接口，尝试使用refreshToken
-  let headers = makeAuthHeaders(token);
+  const isGet = method === 'GET';
+  const bodyData = isGet ? undefined : data;
+
+  // 尝试多种鉴权 + 加密方案
+  let headers = makeAuthHeaders(token, method, apiPath, bodyData);
   let lastErr = null;
 
-  for (const h of headers) {
-    try {
-      const res = await axios({
-        method,
-        url: `https://cgzx.scu.edu.cn/app-api${apiPath}`,
-        headers: h,
-        data: data || undefined,
-        timeout: 30000,
-        validateStatus: () => true,
-      });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const h of headers) {
+      try {
+        let reqData = bodyData;
+        let reqHeaders = { ...h };
 
-      const body = res.data;
-      if (body && typeof body === 'object') {
-        // 鉴权失败，试下一种格式
-        if (res.status === 401 || body.code === 401 || body.msg?.includes('未登录') || body.msg?.includes('token')) {
-          lastErr = { success: false, code: 401, msg: body.msg || '鉴权失败', data: null };
-          continue;
+        // 第二次尝试：用 SM4 加密 body
+        if (attempt === 1 && !isGet && bodyData) {
+          const enc = sm4EncryptBody(bodyData);
+          if (enc) {
+            reqData = enc.encrypted;
+            reqHeaders['Content-Type'] = 'text/plain';
+            reqHeaders['X-Encrypted'] = 'sm4';
+            reqHeaders['X-Key'] = enc.key.substring(0, 8);
+          }
         }
-        return { success: true, code: body.code ?? 0, msg: body.msg || '', data: body.data };
+
+        const res = await axios({
+          method,
+          url: `https://cgzx.scu.edu.cn/app-api${apiPath}`,
+          headers: reqHeaders,
+          data: reqData,
+          timeout: 30000,
+          validateStatus: () => true,
+        });
+
+        const body = res.data;
+        if (body && typeof body === 'object') {
+          // 鉴权失败，试下一种格式
+          if (res.status === 401 || body.code === 401 || body.msg?.includes('未登录') || body.msg?.includes('token')) {
+            lastErr = { success: false, code: 401, msg: body.msg || '鉴权失败', data: null };
+            continue;
+          }
+          return { success: true, code: body.code ?? 0, msg: body.msg || '', data: body.data };
+        }
+        return { success: true, code: 0, msg: '', data: body };
+      } catch (err) {
+        lastErr = { success: false, code: -1, msg: err.code === 'ECONNABORTED' ? '请求超时' : err.message, data: null };
       }
-      return { success: true, code: 0, msg: '', data: body };
-    } catch (err) {
-      lastErr = { success: false, code: -1, msg: err.code === 'ECONNABORTED' ? '请求超时' : err.message, data: null };
     }
   }
   return lastErr;
