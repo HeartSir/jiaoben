@@ -14,7 +14,7 @@ services:
     repo: https://github.com/HeartSir/jiaoben
     region: singapore  # 东南亚节点，访问川大系统更快
     plan: free
-    buildCommand: npm install && npx playwright install chromium
+    buildCommand: npm install && npx playwright install chromium --with-deps
     startCommand: node dashboard.js
     healthCheckPath: /health
     envVars:

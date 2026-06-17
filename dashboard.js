@@ -15,6 +15,14 @@ const fs = require('fs');
 const https = require('https');
 const http = require('http');
 const os = require('os');
+
+// ⚠️ 全局错误处理：防止未捕获异常导致进程退出
+process.on('unhandledRejection', (reason) => {
+  console.error(`[FATAL] 未捕获的 Promise 拒绝: ${reason?.message || reason}`);
+});
+process.on('uncaughtException', (err) => {
+  console.error(`[FATAL] 未捕获的异常: ${err.message}`);
+});
 const { main, loadConfig, saveConfig, setStatusCallback, getLogs, getResult, scanAvailableSlots, quickBookSlot, stopEngine } = require('./book.js');
 
 const app = express();
