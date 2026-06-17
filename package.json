@@ -1,11 +1,14 @@
 {
   "name": "venue-booking",
-  "version": "1.0.0",
-  "description": "川大场地自动抢订系统",
-  "main": "server.js",
+  "version": "2.3.0",
+  "description": "川大场馆自动抢订系统 - 服务器版",
+  "main": "dashboard.js",
   "scripts": {
-    "start": "node server.js",
-    "book": "node book.js"
+    "setup": "node setup.js",
+    "start": "node dashboard.js",
+    "build": "npx playwright install chromium --with-deps",
+    "book": "node book.js",
+    "login": "node login.js"
   },
   "dependencies": {
     "axios": "^1.18.0",
@@ -16,5 +19,16 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "node_modules/playwright-core/browsers.json"
+    ],
+    "scripts": [
+      "dashboard.js",
+      "book.js",
+      "server.js"
+    ]
+  }
 }

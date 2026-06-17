@@ -278,6 +278,19 @@
     </div>
   </div>
 
+  <!-- 场馆选择 -->
+  <div class="card">
+    <div class="card-title">
+      🏟️ 预约场馆
+      <span class="badge badge-blue" id="venueBadge">望江体育馆二楼羽毛球场</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <select id="venueSelect" onchange="onVenueChange()" style="padding:8px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;background:#fff;outline:none;flex:1;min-width:200px;">
+      </select>
+      <span style="font-size:12px;color:#888;">切换后场地列表自动更新</span>
+    </div>
+  </div>
+
   <!-- 志愿配置 -->
   <div class="card">
     <div class="card-title">
@@ -312,6 +325,29 @@
     </div>
   </div>
 
+  <!-- 实时扫描 -->
+  <div class="card">
+    <div class="card-title">
+      📡 可用时段实时扫描
+      <span class="badge badge-blue" id="scanCountBadge">点击按钮扫描</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="scanBtn" onclick="startScan()">🔍 扫描可用时段</button>
+      <span id="scanStatus" style="font-size:13px;color:#888;"></span>
+    </div>
+    <div id="scanResults" style="display:none;">
+      <div style="font-size:13px;color:#888;margin-bottom:10px;">
+        共 <strong id="scanCount" style="color:#0f3460;">0</strong> 个可用时段
+        <span id="scanVenue" style="margin-left:8px;"></span>
+      </div>
+      <div id="scanGrid"></div>
+    </div>
+    <div id="scanEmpty" style="display:none;text-align:center;padding:30px;color:#888;font-size:14px;">
+      😢 当前没有可用时段
+    </div>
+    <div id="scanError" style="display:none;text-align:center;padding:20px;color:#c62828;font-size:13px;"></div>
+  </div>
+
   <!-- 日志 -->
   <div class="card">
     <div class="card-title">
@@ -328,15 +364,63 @@
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<!-- Token 输入弹窗 -->
+<div id="tokenModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:999;justify-content:center;align-items:center;">
+  <div style="background:#fff;border-radius:12px;padding:30px;max-width:420px;width:90%;box-shadow:0 4px 30px rgba(0,0,0,.2);">
+    <div style="font-size:16px;font-weight:600;margin-bottom:12px;">🔑 粘贴 Token</div>
+    <div style="font-size:13px;color:#888;margin-bottom:16px;">
+      在已登录的电脑上按 F12 → 控制台 → 输入：
+      <code style="display:block;background:#f5f5f5;padding:6px 10px;border-radius:4px;margin:8px 0;">uni.getStorageSync('accessToken')</code>
+      把输出粘贴到下面：
+    </div>
+    <input id="tokenInput" type="text" placeholder="粘贴 accessToken..." style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none;margin-bottom:10px;box-sizing:border-box;">
+    <input id="refreshTokenInput" type="text" placeholder="refreshToken（选填）" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none;margin-bottom:16px;box-sizing:border-box;">
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button onclick="closeTokenInput()" style="padding:8px 20px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer;">取消</button>
+      <button onclick="setToken()" style="padding:8px 20px;border:none;border-radius:8px;background:#0f3460;color:#fff;cursor:pointer;">保存</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ========== 常量 ==========
-const VENUES = [
-  { id: 36, name: '1号场' }, { id: 37, name: '2号场' }, { id: 38, name: '3号场' },
-  { id: 39, name: '4号场' }, { id: 40, name: '5号场' }, { id: 41, name: '6号场' },
-  { id: 42, name: '7号场' }, { id: 43, name: '8号场' }, { id: 44, name: '9号场' },
-  { id: 45, name: '10号场' },
+// 场馆列表
+const VENUE_LIST = [
+  { id: 1, name: '望江体育馆二楼羽毛球场' },
+  { id: 9, name: '华西体育馆羽毛球场' },
+  { id: 4, name: '望江体育馆一楼羽毛球场' },
+  { id: 19, name: '江安体育馆羽毛球场' },
+  { id: 22, name: '江安南区网球场' },
+  { id: 18, name: '江安网球场' },
+  { id: 12, name: '华西网球馆' },
+  { id: 10, name: '华西网球场' },
+  { id: 5, name: '望江体育馆乒乓球馆' },
+  { id: 3, name: '望江红土网球场' },
+  { id: 2, name: '望江西区网球场' },
 ];
-const TIMES = ['10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00'];
+
+// 每个场馆对应的场地列表
+const VENUE_FIELDS = {
+  1: [ // 望江体育馆二楼羽毛球场
+    { id: 36, name: '1号场' }, { id: 37, name: '2号场' }, { id: 38, name: '3号场' },
+    { id: 39, name: '4号场' }, { id: 40, name: '5号场' }, { id: 41, name: '6号场' },
+    { id: 42, name: '7号场' }, { id: 43, name: '8号场' }, { id: 44, name: '9号场' },
+    { id: 45, name: '10号场' },
+  ],
+  9: [ // 华西体育馆羽毛球场
+    { id: 1, name: '1号场' }, { id: 2, name: '2号场' }, { id: 3, name: '3号场' },
+    { id: 4, name: '4号场' }, { id: 5, name: '5号场' }, { id: 6, name: '6号场' },
+  ],
+  4: [ // 望江体育馆一楼羽毛球场
+    { id: 46, name: '1号场' }, { id: 47, name: '2号场' }, { id: 48, name: '3号场' },
+    { id: 49, name: '4号场' }, { id: 50, name: '5号场' }, { id: 51, name: '6号场' },
+    { id: 52, name: '7号场' },
+  ],
+};
+// 当前场馆的场地列表（随场馆切换自动更新）
+let currentFields = VENUE_FIELDS[1] || [];
+
+const TIMES = ['10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00','22:00'];
 
 let config = null;
 let isDragging = null;
@@ -396,6 +480,7 @@ async function saveConfig() {
   });
 
   config.wishes = wishes;
+  config.venueId = parseInt(document.getElementById('venueSelect').value) || 1;
   config.fallbackEnabled = document.getElementById('fallbackToggle').checked;
   config.fallbackVenues = fbVenues;
   config.fallbackTimes = fbTimes;
@@ -407,28 +492,134 @@ async function saveConfig() {
   });
 }
 
+// 动态场地缓存（避免反复请求）
+let _dynamicFieldsCache = {};
+
+async function fetchFieldsForVenue(venueId) {
+  // 先查硬编码表
+  if (VENUE_FIELDS[venueId]) return VENUE_FIELDS[venueId];
+  // 查缓存
+  if (_dynamicFieldsCache[venueId]) return _dynamicFieldsCache[venueId];
+  // 请求后端
+  try {
+    const r = await fetch('/api/fields');
+    const d = await r.json();
+    if (d.success && d.fields && d.fields.length > 0) {
+      _dynamicFieldsCache[venueId] = d.fields;
+      return d.fields;
+    }
+  } catch(e) {}
+  return [];
+}
+
 // ========== 渲染 ==========
-function render() {
+async function render() {
+  const sel = document.getElementById('venueSelect');
+  sel.innerHTML = '';
+  VENUE_LIST.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = v.name;
+    if (v.id === (config?.venueId || 1)) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  const venueId = config?.venueId || 1;
+  const cached = _dynamicFieldsCache[venueId];
+  currentFields = VENUE_FIELDS[venueId] || cached || [];
+  document.getElementById('venueBadge').textContent = VENUE_LIST.find(v => v.id === venueId)?.name || '未知场馆';
+
   renderWishes();
   renderFallback();
   renderStatus();
+
+  // 后台加载场地列表（所有场馆，不限于非硬编码）
+  if (currentFields.length === 0 && !cached) {
+    fetchFieldsForVenue(venueId).then(fields => {
+      if (fields.length > 0) {
+        currentFields = fields;
+        renderWishes();
+        renderFallback();
+      }
+    }).catch(() => {});
+  }
+}
+
+async function onVenueChange() {
+  const venueId = parseInt(document.getElementById('venueSelect').value);
+  config.venueId = venueId;
+
+  currentFields = VENUE_FIELDS[venueId] || _dynamicFieldsCache[venueId] || [];
+
+  const wishes = config.wishes || [];
+  if (wishes.length > 0 && currentFields.length > 0) {
+    const firstField = currentFields[0];
+    wishes.forEach(w => {
+      const stillExists = currentFields.some(f => f.id === w.fieldId);
+      if (!stillExists) {
+        w.fieldId = firstField.id;
+        w.name = firstField.name;
+      }
+    });
+  }
+  document.getElementById('venueBadge').textContent = VENUE_LIST.find(v => v.id === venueId)?.name || '未知场馆';
+  await saveConfig();
+  render();
+
+  if (currentFields.length === 0) {
+    fetchFieldsForVenue(venueId).then(fields => {
+      if (fields.length > 0) {
+        currentFields = fields;
+        renderWishes();
+        renderFallback();
+      }
+    }).catch(() => {});
+  }
 }
 
 function renderWishes() {
   const list = document.getElementById('wishList');
   list.innerHTML = '';
+
+  // 没有场地数据时显示提示
+  if (!config?.wishes || config.wishes.length === 0) {
+    list.innerHTML = '<div style="text-align:center;padding:20px;color:#bbb;font-size:13px;">点击「添加志愿」开始配置</div>';
+    return;
+  }
+
+  // 🔑 自动纠正乱码名字：如果名字含问号或无法解析的字符，从场地列表查正确名称
+  function fixName(name, fieldId) {
+    // 含替换字符(�)或全是问号 → 尝试纠正
+    if (!name || name.includes('�') || /^[?�\s]+$/.test(name)) {
+      const found = currentFields.find(f => f.id === fieldId);
+      if (found && found.name) return found.name;
+    }
+    return name;
+  }
+
   (config.wishes || []).forEach((w, i) => {
+    // 纠正编码损坏的名字
+    w.name = fixName(w.name, w.fieldId);
     const li = document.createElement('li');
     li.className = 'wish-item' + (w.enabled === false ? ' disabled' : '');
     li.draggable = true;
     li.dataset.idx = i;
+
+    // 场地下拉：当前场馆有数据就用，没有则显示"加载中"
+    let fieldOpts;
+    if (currentFields.length > 0) {
+      fieldOpts = currentFields.map(v => `<option value="${v.id}" ${v.id === w.fieldId ? 'selected' : ''}>${v.name}</option>`).join('');
+    } else {
+      // 没有场地数据时，至少显示当前志愿保存的场地名称
+      fieldOpts = `<option value="${w.fieldId}" selected>${w.name} ${'(加载场地中...)'}</option>`;
+    }
 
     li.innerHTML = `
       <span class="drag-handle" draggable="false">⠿</span>
       <span class="rank">#${i+1}</span>
       <span style="font-size:13px;color:#888;">场地</span>
       <select class="vfield" onchange="updateWishName(this)">
-        ${VENUES.map(v => `<option value="${v.id}" ${v.id === w.fieldId ? 'selected' : ''}>${v.name}</option>`).join('')}
+        ${fieldOpts}
       </select>
       <input type="text" class="vname" value="${w.name}" placeholder="名称" style="max-width:70px;">
       <span style="font-size:13px;color:#888;">时间</span>
@@ -486,7 +677,7 @@ function renderFallback() {
   addBtn.textContent = '＋ 添加场地';
   addBtn.onclick = () => {
     const used = (config.fallbackVenues || []).map(v => v.fieldId);
-    const avail = VENUES.find(v => !used.includes(v.id));
+    const avail = currentFields.find(v => !used.includes(v.id));
     if (avail) {
       if (!config.fallbackVenues) config.fallbackVenues = [];
       config.fallbackVenues.push({ name: avail.name, fieldId: avail.id });
@@ -513,22 +704,29 @@ function renderFallback() {
 }
 
 async function renderStatus() {
-  const r = await fetch('/api/status');
-  const s = await r.json();
+  try {
+    const r = await fetch('/api/status');
+    const s = await r.json();
 
-  document.getElementById('sAuth').innerHTML = s.hasAuth
-    ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">已登录</div>'
-    : '<div class="num" style="color:#c62828">❌</div><div class="label">未登录</div>';
+    document.getElementById('sAuth').innerHTML = s.loginInProgress
+      ? '<div class="num" style="color:#e65100">⏳</div><div class="label"><span style="font-size:12px;color:#e65100;">扫码中...</span></div>'
+      : s.hasAuth
+        ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">已登录</div>'
+        : '<div class="num" style="color:#c62828">❌</div><div class="label"><button onclick="startLogin()" style="font-size:12px;padding:4px 14px;border-radius:6px;border:1px solid #c62828;background:#fff;color:#c62828;cursor:pointer;margin-top:4px;">扫码登录</button><button onclick="showTokenInput()" style="font-size:12px;padding:4px 14px;border-radius:6px;border:1px solid #888;background:#fff;color:#555;cursor:pointer;margin-top:4px;margin-left:4px;">粘贴 Token</button></div>';
 
-  document.getElementById('sWishes').innerHTML =
-    `<div class="num">${s.wishes}</div><div class="label">激活志愿</div>`;
+    document.getElementById('sWishes').innerHTML =
+      `<div class="num">${s.wishes}</div><div class="label">激活志愿</div>`;
 
-  document.getElementById('sMode').innerHTML = s.fallback
-    ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">扫荡已启用</div>'
-    : '<div class="num" style="color:#888">⛔</div><div class="label">扫荡已关闭</div>';
+    document.getElementById('sMode').innerHTML = s.fallback
+      ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">扫荡已启用</div>'
+      : '<div class="num" style="color:#888">⛔</div><div class="label">扫荡已关闭</div>';
 
-  document.getElementById('statusBadge').textContent = s.hasAuth ? '就绪' : '未登录';
-  document.getElementById('statusBadge').className = 'badge ' + (s.hasAuth ? 'badge-green' : 'badge-red');
+    const badge = document.getElementById('statusBadge');
+    if (badge) {
+      badge.textContent = s.loginInProgress ? '扫码中...' : (s.hasAuth ? '就绪' : '未登录');
+      badge.className = 'badge ' + (s.loginInProgress ? 'badge-orange' : (s.hasAuth ? 'badge-green' : 'badge-red'));
+    }
+  } catch(e) { /* 静默 */ }
 }
 
 // ========== 倒计时 ==========
@@ -601,16 +799,39 @@ function delWish(el) {
   saveConfig();
 }
 function addWish() {
+  // 找一个未使用的场地
   const used = (config.wishes || []).map(w => w.fieldId);
-  const avail = VENUES.find(v => !used.includes(v.id));
+  let avail = currentFields.find(v => !used.includes(v.id));
+
+  // 当前场馆没有场地数据时，用默认场地号
+  if (!avail) {
+    const candidateFields = VENUE_FIELDS[config?.venueId] || currentFields;
+    if (candidateFields.length === 0) {
+      for (let i = 1; i <= 60; i++) {
+        if (!used.includes(i)) {
+          // 根据场馆名推断场地命名
+          const vn = (VENUE_LIST.find(v => v.id === config?.venueId)?.name || '');
+          const suffix = vn.includes('乒乓') ? '台' : (vn.includes('网球') ? '场' : '场');
+          avail = { id: i, name: `${i}号${suffix}` };
+          break;
+        }
+      }
+    }
+  }
+
+  if (!config.wishes) config.wishes = [];
   if (avail) {
-    if (!config.wishes) config.wishes = [];
     config.wishes.push({ name: avail.name, fieldId: avail.id, time: '21:00', timeEnd: '22:00', enabled: true });
-    saveConfig().then(render);
   } else {
     config.wishes.push({ name: '场地', fieldId: 36, time: '21:00', timeEnd: '22:00', enabled: true });
-    saveConfig().then(render);
   }
+
+  // 🔑 直接 POST 配置，不走 DOM 读取（因为还没渲染）
+  fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }).then(() => render());
 }
 
 // ========== 触发抢场 ==========
@@ -632,6 +853,189 @@ async function triggerBook() {
   }, 3000);
 }
 
+// ========== 扫描可用时段 ==========
+async function startScan() {
+  const btn = document.getElementById('scanBtn');
+  const status = document.getElementById('scanStatus');
+  const results = document.getElementById('scanResults');
+  const empty = document.getElementById('scanEmpty');
+  const error = document.getElementById('scanError');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 扫描中...';
+  status.textContent = '正在查询所有场地...';
+  results.style.display = 'none';
+  empty.style.display = 'none';
+  error.style.display = 'none';
+
+  // 开始计时
+  const startTime = Date.now();
+
+  try {
+    const r = await fetch('/api/scan');
+    const d = await r.json();
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+
+    if (d.success && d.slots && d.slots.length > 0) {
+      document.getElementById('scanCount').textContent = d.slots.length;
+      document.getElementById('scanVenue').textContent = `（${d.venueName || ''}）`;
+      document.getElementById('scanCountBadge').textContent = `${d.slots.length} 个可用`;
+      document.getElementById('scanCountBadge').className = 'badge badge-green';
+
+      // 按场地分组
+      const grouped = {};
+      d.slots.forEach(s => {
+        if (!grouped[s.fieldId]) grouped[s.fieldId] = { fieldName: s.fieldName, fieldId: s.fieldId, slots: [] };
+        grouped[s.fieldId].slots.push(s);
+      });
+
+      const grid = document.getElementById('scanGrid');
+      grid.innerHTML = '';
+
+      Object.values(grouped).forEach(g => {
+        const block = document.createElement('div');
+        block.style.cssText = 'margin-bottom:12px;';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'font-size:14px;font-weight:600;margin-bottom:6px;color:#333;';
+        title.textContent = g.fieldName;
+        block.appendChild(title);
+
+        const chips = document.createElement('div');
+        chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+
+        g.slots.forEach(s => {
+          const chip = document.createElement('button');
+          chip.textContent = `${s.startTime} ¥${s.price}`;
+          chip.title = `点击预约 ${g.fieldName} ${s.startTime}-${s.endTime}`;
+          chip.style.cssText =
+            'padding:6px 14px;border-radius:16px;border:1px solid #0f3460;' +
+            'background:#e3f2fd;color:#0f3460;font-size:13px;cursor:pointer;' +
+            'transition:all .2s;';
+          chip.onmouseenter = () => { chip.style.background = '#bbdefb'; chip.style.transform = 'scale(1.05)'; };
+          chip.onmouseleave = () => { chip.style.background = '#e3f2fd'; chip.style.transform = 'scale(1)'; };
+          chip.onclick = () => bookSlot(s);
+          chips.appendChild(chip);
+        });
+
+        block.appendChild(chips);
+        grid.appendChild(block);
+      });
+
+      results.style.display = 'block';
+      status.textContent = `✅ ${elapsed}秒完成`;
+    } else {
+      empty.style.display = 'block';
+      document.getElementById('scanCountBadge').textContent = '无可用时段';
+      document.getElementById('scanCountBadge').className = 'badge badge-gray';
+      status.textContent = d.error ? `❌ ${d.error}` : `✅ ${elapsed}秒完成`;
+    }
+  } catch (err) {
+    error.textContent = `❌ 扫描失败: ${err.message}`;
+    error.style.display = 'block';
+    status.textContent = '❌ 失败';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 扫描可用时段';
+  }
+}
+
+async function bookSlot(slot) {
+  if (!confirm(`确认预约 ${slot.fieldName} ${slot.startTime} ~ ${slot.endTime}（¥${slot.price}）？`)) return;
+
+  try {
+    // Disable button if we can find it
+    const r = await fetch('/api/book-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(slot),
+    });
+    const d = await r.json();
+
+    if (d.success) {
+      showToast(`🎉 ${slot.fieldName} ${slot.startTime} 预约成功！${d.orderNo ? '#'+d.orderNo : ''}`, 'success');
+      // 自动重新扫描刷新状态
+      setTimeout(startScan, 1500);
+    } else {
+      showToast(`❌ 预约失败: ${d.error || '未知错误'}`, 'error');
+    }
+  } catch (err) {
+    showToast(`❌ 预约失败: ${err.message}`, 'error');
+  }
+}
+
+// ========== 粘贴 Token（服务器无头环境） ==========
+function showTokenInput() {
+  document.getElementById('tokenModal').style.display = 'flex';
+  document.getElementById('tokenInput').value = '';
+  document.getElementById('refreshTokenInput').value = '';
+  document.getElementById('tokenInput').focus();
+}
+function closeTokenInput() {
+  document.getElementById('tokenModal').style.display = 'none';
+}
+async function setToken() {
+  const token = document.getElementById('tokenInput').value.trim();
+  if (!token) { showToast('请输入 accessToken', 'error'); return; }
+  const refreshToken = document.getElementById('refreshTokenInput').value.trim();
+  try {
+    const r = await fetch('/api/set-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, refreshToken }),
+    });
+    const d = await r.json();
+    if (d.success) {
+      showToast('✅ Token 已保存！', 'success');
+      closeTokenInput();
+      renderStatus();
+    } else {
+      showToast('❌ ' + (d.error || '保存失败'), 'error');
+    }
+  } catch (err) {
+    showToast('❌ ' + err.message, 'error');
+  }
+}
+
+// ========== 扫码登录 ==========
+let loginStarting = false;
+
+async function startLogin() {
+  if (loginStarting) return;
+  loginStarting = true;
+  appendLog({ time: new Date().toLocaleTimeString('zh-CN'), msg: '🚀 正在打开浏览器进行扫码登录...' });
+
+  const r = await fetch('/api/login', { method: 'POST' });
+  const d = await r.json();
+  if (!d.success) {
+    appendLog({ time: new Date().toLocaleTimeString('zh-CN'), msg: '❌ ' + (d.error || '') });
+    loginStarting = false;
+    return;
+  }
+
+  // 轮询状态直到登录完成或 5 分钟后超时
+  let waited = 0;
+  const poll = setInterval(async () => {
+    waited += 2;
+    const sr = await fetch('/api/status');
+    const s = await sr.json();
+    if (s.hasAuth && !s.loginInProgress) {
+      clearInterval(poll);
+      loginStarting = false;
+      appendLog({ time: new Date().toLocaleTimeString('zh-CN'), msg: '✅ 登录成功！状态已更新' });
+      renderStatus();
+    } else if (!s.loginInProgress && waited > 30) {
+      // loginInProgress turned false but no auth -> login failed/timed out
+      clearInterval(poll);
+      loginStarting = false;
+      renderStatus();
+    }
+  }, 2000);
+
+  // 过 5 秒强制刷新一次状态（万一轮询漏了）
+  setTimeout(() => renderStatus(), 5000);
+}
+
 // ========== Toast ==========
 function showToast(msg, type) {
   const el = document.getElementById('toast');
@@ -646,6 +1050,11 @@ function connectSSE() {
   evtSource.onmessage = e => {
     try {
       const entry = JSON.parse(e.data);
+      // 检测登录成功信号，刷新状态
+      if (entry.msg === '__LOGIN_SUCCESS__') {
+        setTimeout(renderStatus, 500);
+        return;
+      }
       appendLog(entry);
     } catch(err) {}
   };
@@ -667,11 +1076,13 @@ loadConfig().then(() => {
   setInterval(updateCountdown, 1000);
   setInterval(updateClock, 1000);
   setInterval(() => fetch('/api/status').then(r => r.json()).then(s => {
-    document.getElementById('sAuth').innerHTML = s.hasAuth
-      ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">已登录</div>'
-      : '<div class="num" style="color:#c62828">❌</div><div class="label">未登录</div>';
-    document.getElementById('statusBadge').textContent = s.hasAuth ? '就绪' : '未登录';
-    document.getElementById('statusBadge').className = 'badge ' + (s.hasAuth ? 'badge-green' : 'badge-red');
+    document.getElementById('sAuth').innerHTML = s.loginInProgress
+      ? '<div class="num" style="color:#e65100">⏳</div><div class="label"><span style="font-size:12px;color:#e65100;">扫码中...</span></div>'
+      : s.hasAuth
+        ? '<div class="num" style="color:#2e7d32">✅</div><div class="label">已登录</div>'
+        : '<div class="num" style="color:#c62828">❌</div><div class="label"><button onclick="startLogin()" style="font-size:12px;padding:4px 14px;border-radius:6px;border:1px solid #c62828;background:#fff;color:#c62828;cursor:pointer;margin-top:4px;">扫码登录</button><button onclick="showTokenInput()" style="font-size:12px;padding:4px 14px;border-radius:6px;border:1px solid #888;background:#fff;color:#555;cursor:pointer;margin-top:4px;margin-left:4px;">粘贴 Token</button></div>';
+    document.getElementById('statusBadge').textContent = s.loginInProgress ? '扫码中...' : (s.hasAuth ? '就绪' : '未登录');
+    document.getElementById('statusBadge').className = 'badge ' + (s.loginInProgress ? 'badge-orange' : (s.hasAuth ? 'badge-green' : 'badge-red'));
   }), 5000);
   updateClock();
   updateCountdown();

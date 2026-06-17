@@ -11,8 +11,10 @@ const path = require('path');
 const fs = require('fs');
 
 // ========== 路径 ==========
-const CONFIG_FILE = path.join(__dirname, 'config.json');
-const AUTH_FILE = path.join(__dirname, '.venue-auth.json');
+const BASE_DIR = (process.pkg ? path.dirname(process.execPath) : __dirname);
+const DATA_DIR = process.env.RENDER_DATA_DIR || BASE_DIR;
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const AUTH_FILE = path.join(DATA_DIR, '.venue-auth.json');
 
 // ========== 状态 ==========
 let _statusCallback = null;
@@ -45,13 +47,28 @@ function getResult() {
 }
 
 function loadConfig() {
-  if (!fs.existsSync(CONFIG_FILE)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-  } catch(e) { return null; }
+  // 优先从持久存储读取，没有则用部署包里的默认配置
+  const files = [CONFIG_FILE, path.join(BASE_DIR, 'config.json')];
+  for (const f of files) {
+    if (fs.existsSync(f)) {
+      try {
+        const cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+        // 如果是从 BASE_DIR 读的而 CONFIG_FILE 不存在，复制一份到持久存储
+        if (f !== CONFIG_FILE && !fs.existsSync(CONFIG_FILE)) {
+          try {
+            fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+            fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+          } catch(e) {}
+        }
+        return cfg;
+      } catch(e) { return null; }
+    }
+  }
+  return null;
 }
 
 function saveConfig(cfg) {
+  try { fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true }); } catch(e) {}
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
 }
 
@@ -269,6 +286,159 @@ class BookingEngine {
     return this.callAPI('GET', `/venue/field/get-bookable-times/${fieldId}`);
   }
 
+  // 动态获取场馆下的所有场地 — 多种方式尝试
+  async discoverFields(venueId) {
+    // 方法1: 尝试直接 API 路径
+    const patterns = [
+      `/venue/field/list?venueId=${venueId}`,
+      `/venue/field/list-by-venue-id/${venueId}`,
+      `/venue/field/page?venueId=${venueId}&pageSize=100`,
+      `/venue/field/list-all`,
+      `/venue/venue-field/list-by-venue?venueId=${venueId}`,
+      `/venue/venue/${venueId}/fields`,
+      `/venue/venue/${venueId}`,
+      `/venue/field/get-bookable-times?venueId=${venueId}`,
+    ];
+    for (const path of patterns) {
+      try {
+        const result = await this.callAPI('GET', path);
+        if (result.success && result.code === 0 && result.data) {
+          const raw = Array.isArray(result.data)
+            ? result.data
+            : result.data.records || result.data.list || result.data.items || [];
+          if (raw.length > 0) {
+            const fields = raw.map(f => ({
+              id: f.id,
+              name: f.name || `场地 #${f.id}`,
+            }));
+            log(`📋 API 获取到 ${fields.length} 个场地`);
+            return fields;
+          }
+        }
+      } catch (e) { /* 试下一个 */ }
+    }
+
+    // 方法2: 用 uni.request 直接调用（绕开 uni.$u.http 的拦截器）
+    try {
+      log(`📡 尝试 uni.request 直达...`);
+      const result = await this.page.evaluate(async (vid) => {
+        async function tryUni(path) {
+          try {
+            return await new Promise((resolve, reject) => {
+              uni.request({ url: '/app-api' + path, method: 'GET', success: resolve, fail: reject });
+            });
+          } catch(e) { return null; }
+        }
+        const paths = [
+          `/venue/field/list?venueId=${vid}`,
+          `/venue/field/list-by-venue-id/${vid}`,
+          `/venue/field/page?venueId=${vid}&pageSize=100`,
+        ];
+        for (const p of paths) {
+          const res = await tryUni(p);
+          if (res?.data?.code === 0 && res.data.data) {
+            const raw = Array.isArray(res.data.data) ? res.data.data
+              : res.data.data.records || res.data.data.list || [];
+            if (raw.length > 0) {
+              return raw.map(f => ({ id: f.id, name: f.name || `场地 #${f.id}` }));
+            }
+          }
+        }
+        return null;
+      }, venueId);
+      if (result && result.length > 0) {
+        log(`📋 uni.request 获取到 ${result.length} 个场地`);
+        return result;
+      }
+    } catch(e) { log(`⚠️ uni.request 失败: ${e.message}`); }
+
+    // 方法3: 导航到场馆页面，读取 Vue 组件的响应式数据
+    try {
+      log(`🌐 尝试从页面提取 uni-app 组件数据...`);
+      await this.page.goto('https://cgzx.scu.edu.cn/venue/', {
+        waitUntil: 'domcontentloaded', timeout: 15000,
+      }).catch(() => {});
+
+      // 等 uni-app 就绪
+      for (let i = 0; i < 15; i++) {
+        const ready = await this.page.evaluate(() => {
+          try { return typeof uni !== 'undefined' && !!uni.getStorageSync; } catch(e) { return false; }
+        }).catch(() => false);
+        if (ready) break;
+        await sleep(1000);
+      }
+
+      // 注入 token
+      const token = this.getToken();
+      if (token) {
+        await this.page.evaluate(t => {
+          try { uni.setStorageSync('accessToken', t); } catch(e) {}
+        }, token);
+      }
+
+      await sleep(2000);
+
+      // 遍历页面上的所有 Vue 实例，找场地列表
+      const fields = await this.page.evaluate((vid) => {
+        const results = [];
+        const seen = new Set();
+
+        function tryExtract(obj, depth = 0) {
+          if (depth > 4 || !obj || seen.size > 200) return;
+          try {
+            // 如果这个对象看起来像场地列表（有 fieldId 或 id + 中文名）
+            if (Array.isArray(obj) && obj.length > 0 && obj.length < 100) {
+              for (const item of obj) {
+                if (item && (item.id || item.fieldId) && (item.name || item.fieldName)) {
+                  const id = item.id || item.fieldId;
+                  if (!seen.has(id)) {
+                    seen.add(id);
+                    results.push({ id, name: item.name || item.fieldName });
+                  }
+                }
+              }
+              if (results.length > 2) return; // 找到了就停止深入
+            }
+            // 递归遍历对象属性
+            if (typeof obj === 'object' && obj !== null) {
+              for (const key of Object.keys(obj)) {
+                if (key.startsWith('_') || key === 'constructor' || key === 'prototype') continue;
+                try { tryExtract(obj[key], depth + 1); } catch(e) {}
+                if (results.length > 20) return;
+              }
+            }
+          } catch(e) {}
+        }
+
+        // 从各个可能的入口遍历
+        const roots = [
+          document.querySelector('#app')?.__vue__,
+          document.querySelector('#app')?.__vue_app__,
+          document.querySelector('.uni-app')?.__vue__,
+          window.__vue__,
+        ];
+        for (const root of roots) {
+          tryExtract(root);
+        }
+
+        // 去重按 id
+        const dedup = new Map();
+        results.forEach(r => { if (!dedup.has(r.id)) dedup.set(r.id, r); });
+        return Array.from(dedup.values());
+      }, venueId);
+
+      if (fields && fields.length > 0) {
+        log(`📋 从页面提取到 ${fields.length} 个场地`);
+        return fields;
+      }
+    } catch(e) {
+      log(`⚠️ 页面提取失败: ${e.message}`);
+    }
+
+    log(`⚠️ 所有方式均无法获取场馆 #${venueId} 的场地列表`);
+    return null;
+  }
+
   async createOrder(fieldId, startTime, endTime, date) {
     const cfg = this.config;
     return this.callAPI('POST', '/venue/booking/orders/create', {
@@ -416,8 +586,216 @@ async function main() {
   }
 }
 
+// ========== 场馆-场地映射（用于扫描功能） ==========
+const VENUE_FIELDS = {
+  1: [ // 望江体育馆二楼羽毛球场
+    { id: 36, name: '1号场' }, { id: 37, name: '2号场' }, { id: 38, name: '3号场' },
+    { id: 39, name: '4号场' }, { id: 40, name: '5号场' }, { id: 41, name: '6号场' },
+    { id: 42, name: '7号场' }, { id: 43, name: '8号场' }, { id: 44, name: '9号场' },
+    { id: 45, name: '10号场' },
+  ],
+  9: [ // 华西体育馆羽毛球场
+    { id: 1, name: '1号场' }, { id: 2, name: '2号场' }, { id: 3, name: '3号场' },
+    { id: 4, name: '4号场' }, { id: 5, name: '5号场' }, { id: 6, name: '6号场' },
+  ],
+  4: [ // 望江体育馆一楼羽毛球场
+    { id: 46, name: '1号场' }, { id: 47, name: '2号场' }, { id: 48, name: '3号场' },
+    { id: 49, name: '4号场' }, { id: 50, name: '5号场' }, { id: 51, name: '6号场' },
+    { id: 52, name: '7号场' },
+  ],
+};
+
+function getFieldsForVenue(venueId) {
+  return VENUE_FIELDS[venueId] || [];
+}
+
+function getVenueName(venueId) {
+  const names = {
+    1: '望江体育馆二楼羽毛球场',
+    9: '华西体育馆羽毛球场',
+    4: '望江体育馆一楼羽毛球场',
+    19: '江安体育馆羽毛球场',
+    22: '江安南区网球场',
+    18: '江安网球场',
+    12: '华西网球馆',
+    10: '华西网球场',
+    5: '望江体育馆乒乓球馆',
+    3: '望江红土网球场',
+    2: '望江西区网球场',
+  };
+  return names[venueId] || `场馆 #${venueId}`;
+}
+
+function computeEndTime(startTime) {
+  const h = parseInt(startTime) + 1;
+  return String(Math.min(h, 22)).padStart(2, '0') + ':00';
+}
+
+// ========== 面板持久引擎（扫描/一键预约） ==========
+// 独立于 main() 的调度引擎，面板通过它实时查询和预约
+let _panelEngine = null;
+let _panelEnginePromise = null;
+
+async function _ensurePanelEngine() {
+  // 🔑 如果引擎正在启动中，等待它完成而不是直接返回 false
+  if (_panelEnginePromise) {
+    log('⏳ 面板引擎正在启动，等待中...');
+    return await _panelEnginePromise;
+  }
+
+  // 检查已有引擎是否还活着
+  if (_panelEngine && _panelEngine.page) {
+    try {
+      const alive = await _panelEngine.page.evaluate(() => true).catch(() => false);
+      if (alive && !_panelEngine.page.isClosed()) return true;
+    } catch (e) {
+      log('面板引擎已断开，重建中...');
+    }
+    await _panelEngine.close().catch(() => {});
+    _panelEngine = null;
+  }
+
+  // 启动新引擎（后续调用者会自动等待这个 Promise）
+  _panelEnginePromise = (async () => {
+    try {
+      log('🔄 启动面板引擎...');
+      _panelEngine = new BookingEngine();
+      const ok = await _panelEngine.start();
+      if (ok) log('✅ 面板引擎就绪');
+      else log('❌ 面板引擎启动失败');
+      return ok;
+    } finally {
+      _panelEnginePromise = null;
+    }
+  })();
+
+  return await _panelEnginePromise;
+}
+
+async function scanAvailableSlots() {
+  // 确保引擎运行中
+  if (!_panelEngine || !_panelEngine.page) {
+    const ok = await _ensurePanelEngine();
+    if (!ok) return { success: false, error: '引擎启动失败，请先扫码登录' };
+  }
+
+  // 重新加载最新配置
+  const cfg = loadConfig();
+  if (!cfg) return { success: false, error: '未找到配置' };
+
+  const venueId = cfg.venueId || 1;
+  const today = new Date().toISOString().split('T')[0];
+
+  // 获取场地列表（硬编码优先，动态提取兜底）
+  let fields = getFieldsForVenue(venueId);
+  if (!fields || fields.length === 0) {
+    log(`📡 未找到场馆 #${venueId} 的硬编码场地，尝试去页面提取...`);
+    fields = await discoverVenueFields(venueId);
+  }
+  if (!fields || fields.length === 0) {
+    return { success: false, error: '未能获取该场馆的场地列表，该场馆暂不支持扫描功能' };
+  }
+
+  const slots = [];
+
+  log(`📡 开始扫描 ${fields.length} 个场地...`);
+  for (const field of fields) {
+    try {
+      const result = await _panelEngine.getBookableTimes(field.id);
+      if (result.success && result.code === 0 && result.data) {
+        const days = Array.isArray(result.data) ? result.data : [];
+        const day = days.find(d => d.date === today) || days[0];
+        if (day?.timeSlots) {
+          for (const ts of day.timeSlots) {
+            if (ts.bookable === true) {
+              slots.push({
+                fieldId: field.id,
+                fieldName: field.name,
+                startTime: ts.startTime,
+                endTime: ts.endTime || computeEndTime(ts.startTime),
+                price: ts.price || 15,
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      log(`⚠️ 查询 ${field.name} 失败: ${e.message}`);
+    }
+    await sleep(50);
+  }
+
+  log(`📊 扫描完成，共 ${slots.length} 个可用时段`);
+  return { success: true, slots, venueId, venueName: getVenueName(venueId) };
+}
+
+async function discoverVenueFields(venueId) {
+  // 先查硬编码表
+  const hardcoded = getFieldsForVenue(venueId);
+  if (hardcoded.length > 0) return hardcoded;
+
+  // 用面板引擎去学校页面提取（前提：已登录）
+  if (_panelEngine && _panelEngine.page) {
+    try {
+      const discovered = await _panelEngine.discoverFields(venueId);
+      if (discovered && discovered.length > 0) return discovered;
+    } catch (e) {
+      log(`⚠️ 动态获取场地失败: ${e.message}`);
+    }
+  }
+
+  // 先尝试启动引擎
+  const ok = await _ensurePanelEngine();
+  if (ok && _panelEngine?.page) {
+    try {
+      const discovered = await _panelEngine.discoverFields(venueId);
+      if (discovered && discovered.length > 0) return discovered;
+    } catch (e) {
+      log(`⚠️ 动态获取场地失败: ${e.message}`);
+    }
+  }
+
+  // 都失败了，返回空（用户需要先登录，或该场馆暂时不支持）
+  log(`⚠️ 无法获取场馆 #${venueId} 的场地列表`);
+  return [];
+}
+
+async function quickBookSlot(fieldId, fieldName, startTime, endTime) {
+  if (!_panelEngine || !_panelEngine.page) {
+    const ok = await _ensurePanelEngine();
+    if (!ok) return { success: false, error: '引擎未就绪，请先扫码登录' };
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  log(`📋 快速预约 ${fieldName} ${startTime}-${endTime}...`);
+  const result = await _panelEngine.createOrder(fieldId, startTime, endTime, today);
+
+  if (result.success && result.code === 0) {
+    const orderNo = result.data?.orderNo || '未知';
+    log(`🎉 预约成功! ${fieldName} ${startTime} 订单: ${orderNo}`);
+    return { success: true, orderNo };
+  } else {
+    log(`❌ 预约失败: ${result.msg || '未知错误'}`);
+    return { success: false, error: result.msg || '预约失败' };
+  }
+}
+
+async function stopEngine() {
+  if (_panelEngine) {
+    log('🛑 关闭面板引擎');
+    await _panelEngine.close().catch(() => {});
+    _panelEngine = null;
+  }
+}
+
 // ========== 导出 ==========
-module.exports = { main, BookingEngine, loadConfig, saveConfig, setStatusCallback, getLogs, getResult };
+module.exports = {
+  main, BookingEngine,
+  loadConfig, saveConfig, setStatusCallback, getLogs, getResult,
+  scanAvailableSlots, quickBookSlot, stopEngine,
+  discoverVenueFields, getFieldsForVenue, VENUE_FIELDS,
+  ensurePanelEngine: _ensurePanelEngine,
+};
 
 // ========== CLI 直接运行 ==========
 if (require.main === module) {

@@ -1,13 +1,32 @@
-# render.yaml - Render Blueprint
-# 一键部署到 Render
+# 🏸 川大场馆抢订系统 - Render 部署配置
+# 一键部署：点这个链接
+# https://render.com/deploy?repo=https://github.com/YOUR_USERNAME/venue-booking
+#
+# 部署后操作：
+#   1. 设置环境变量 DASHBOARD_PASSWORD=（可选面板密码）
+#   2. 用「粘贴 Token」功能登录
+#   3. 用 UptimeRobot 或 cron-job.org 每 5 分钟 ping 一次防止休眠
 
 services:
   - type: web
     name: venue-booking
-    env: node
-    buildCommand: PLAYWRIGHT_BROWSERS_PATH=0 npm install && npx playwright install chromium chromium-headless-shell
-    startCommand: PLAYWRIGHT_BROWSERS_PATH=0 node server.js
+    runtime: node
+    repo: https://github.com/YOUR_USERNAME/venue-booking
+    region: singapore  # 东南亚节点，访问川大系统更快
+    plan: free
+    buildCommand: npm install && npx playwright install chromium
+    startCommand: node dashboard.js
     healthCheckPath: /health
     envVars:
-      - key: NODE_VERSION
-        value: 20
+      - key: PORT
+        value: "3456"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/.cache/ms-playwright
+      - key: RENDER_DATA_DIR
+        value: /opt/render/project/.data
+      - key: DASHBOARD_PASSWORD
+        sync: false  # 部署后在 Render 面板手动设置
+    disk:
+      name: venue-data
+      mountPath: /opt/render/project/.data
+      sizeGB: 1

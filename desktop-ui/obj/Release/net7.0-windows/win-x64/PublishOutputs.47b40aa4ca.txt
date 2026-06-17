@@ -1,0 +1,5 @@
+D:\desktop\projects\venue-deploy\build\dist\desktop\app-icon.png
+D:\desktop\projects\venue-deploy\build\dist\desktop\Microsoft.Web.WebView2.Core.xml
+D:\desktop\projects\venue-deploy\build\dist\desktop\Microsoft.Web.WebView2.WinForms.xml
+D:\desktop\projects\venue-deploy\build\dist\desktop\Microsoft.Web.WebView2.Wpf.xml
+D:\desktop\projects\venue-deploy\build\dist\desktop\VenueBooking.exe

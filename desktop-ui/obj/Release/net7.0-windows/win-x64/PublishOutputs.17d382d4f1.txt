@@ -1,0 +1,8 @@
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\VenueBooking.pdb
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\app-icon.png
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\runtimes\win-x64\native\WebView2Loader.dll
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\WebView2Loader.dll
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\Microsoft.Web.WebView2.Core.xml
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\Microsoft.Web.WebView2.WinForms.xml
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\Microsoft.Web.WebView2.Wpf.xml
+D:\desktop\projects\venue-deploy\desktop-ui\publish-single\VenueBooking.exe
