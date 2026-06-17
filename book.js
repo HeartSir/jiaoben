@@ -154,19 +154,42 @@ class BookingEngine {
     log('🚀 启动无头浏览器...');
     const launchOpts = {
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-software-rasterizer'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-dev-shm-usage',       // Docker 容器共享内存不足的问题
+        '--single-process',              // 减少内存占用
+        '--disable-extensions',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-background-networking',
+        '--disable-sync',
+        '--no-zygote',
+      ],
     };
 
     // Render 环境检测
     const cacheDir = '/opt/render/.cache/ms-playwright';
     if (fs.existsSync(cacheDir)) {
       const dirs = fs.readdirSync(cacheDir).sort().reverse();
-      const full = dirs.find(d => d.startsWith('chromium-') && !d.includes('headless'));
-      if (full) {
-        const p = path.join(cacheDir, full, 'chrome-linux64', 'chrome');
+      // 优先用 headless shell（更轻量）
+      const shell = dirs.find(d => d.includes('headless_shell'));
+      if (shell) {
+        const p = path.join(cacheDir, shell, 'chrome-linux64', 'chrome');
         if (fs.existsSync(p)) {
           launchOpts.executablePath = p;
-          log(`📂 Chromium: ${full}`);
+          log(`📂 Chromium (headless): ${shell}`);
+        }
+      }
+      if (!launchOpts.executablePath) {
+        const full = dirs.find(d => d.startsWith('chromium-') && !d.includes('headless'));
+        if (full) {
+          const p = path.join(cacheDir, full, 'chrome-linux64', 'chrome');
+          if (fs.existsSync(p)) {
+            launchOpts.executablePath = p;
+            log(`📂 Chromium: ${full}`);
+          }
         }
       }
     }
@@ -184,21 +207,27 @@ class BookingEngine {
         execSync('npx playwright install chromium', { stdio: 'inherit', timeout: 120000 });
         this.browser = await chromium.launch(launchOpts);
       } else {
+        log(`❌ Chromium 启动失败: ${err.message}`);
         throw err;
       }
     }
 
     const context = await this.browser.newContext({
-      viewport: { width: 1280, height: 800 },
+      viewport: { width: 480, height: 360 },   // 扫描不需要大视口
       locale: 'zh-CN',
     });
     this.page = await context.newPage();
 
     log('📡 加载 uni-app 环境...');
-    await this.page.goto('https://cgzx.scu.edu.cn/venue/', {
-      waitUntil: 'domcontentloaded', timeout: 30000
-    }).catch(e => log(`⚠️ ${e.message}`));
-    await sleep(4000);
+    try {
+      await this.page.goto('https://cgzx.scu.edu.cn/venue/', {
+        waitUntil: 'domcontentloaded', timeout: 25000
+      });
+      await sleep(3000);
+    } catch(e) {
+      log(`⚠️ 页面加载超时，尝试继续...`);
+      await sleep(2000);
+    }
 
     // 注入 token
     const token = this.getToken();
@@ -667,6 +696,9 @@ async function _ensurePanelEngine() {
       if (ok) log('✅ 面板引擎就绪');
       else log('❌ 面板引擎启动失败');
       return ok;
+    } catch (e) {
+      log(`❌ 面板引擎崩溃: ${e.message}`);
+      return false;
     } finally {
       _panelEnginePromise = null;
     }
