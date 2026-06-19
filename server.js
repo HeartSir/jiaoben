@@ -16,6 +16,7 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'booking-result.json');
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // 首页 - 显示最近一次抢场结果
 app.get('/', (req, res) => {
@@ -120,6 +121,36 @@ app.post('/api/report', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.send('OK'));
+
+// ========== Console 自动抓取中转 ==========
+// 学校网页 HTTPS → Render HTTPS（正规证书）→ 阿里云 HTTP（无混合内容限制）
+const RELAY_TARGET = 'http://8.137.123.69:3456';
+
+app.post('/api/auto-token-relay', (req, res) => {
+  const http = require('http');
+  const qs = require('querystring');
+  const postData = qs.stringify(req.body || {});
+
+  const opts = {
+    hostname: '8.137.123.69', port: 3456, path: '/api/auto-token',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData) },
+    timeout: 10000,
+  };
+
+  const proxyReq = http.request(opts, (proxyRes) => {
+    let data = '';
+    proxyRes.on('data', (c) => data += c);
+    proxyRes.on('end', () => {
+      try { res.json(JSON.parse(data)); }
+      catch(e) { res.json({ ok: false, error: '中转解析失败' }); }
+    });
+  });
+  proxyReq.on('error', (e) => res.json({ ok: false, error: '中转连接失败: ' + e.message }));
+  proxyReq.on('timeout', () => { proxyReq.destroy(); res.json({ ok: false, error: '中转超时' }); });
+  proxyReq.write(postData);
+  proxyReq.end();
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏸 远程结果查看器运行在端口 ${PORT}`);
