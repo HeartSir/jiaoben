@@ -7,21 +7,24 @@
   "wishes": [
     {
       "name": "1号场",
-      "fieldId": null,
+      "fieldId": 36,
+      "venueId": 1,
       "time": "18:00",
       "timeEnd": "19:00",
       "enabled": true
     },
     {
       "name": "2号场",
-      "fieldId": null,
+      "fieldId": 37,
+      "venueId": 1,
       "time": "18:00",
       "timeEnd": "19:00",
       "enabled": true
     },
     {
       "name": "3号场",
-      "fieldId": null,
+      "fieldId": 38,
+      "venueId": 1,
       "time": "18:00",
       "timeEnd": "19:00",
       "enabled": true
@@ -29,30 +32,12 @@
   ],
   "fallbackEnabled": true,
   "fallbackVenues": [
-    {
-      "name": "1号场",
-      "fieldId": 1
-    },
-    {
-      "name": "2号场",
-      "fieldId": 2
-    },
-    {
-      "name": "3号场",
-      "fieldId": 3
-    },
-    {
-      "name": "4号场",
-      "fieldId": 4
-    },
-    {
-      "name": "5号场",
-      "fieldId": 5
-    },
-    {
-      "name": "6号场",
-      "fieldId": 6
-    }
+    { "name": "4号场", "fieldId": 39, "venueId": 1 },
+    { "name": "5号场", "fieldId": 40, "venueId": 1 },
+    { "name": "6号场", "fieldId": 41, "venueId": 1 },
+    { "name": "7号场", "fieldId": 42, "venueId": 1 },
+    { "name": "8号场", "fieldId": 43, "venueId": 1 },
+    { "name": "9号场", "fieldId": 44, "venueId": 1 }
   ],
   "fallbackTimes": [
     {
