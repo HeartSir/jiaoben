@@ -1521,18 +1521,22 @@ async function sm2Run(opts = {}) {
 
   const wishes = (cfg.wishes || []).filter(w => w.enabled !== false);
 
-  // === 流水线扫描+下单（命中即抢，不等其他场扫完） ===
+  // === 流水线扫描+下单（优先级保障：并发扫描，命中等更高优先级完即下单） ===
   _timing.scan.startMs = Date.now();
   _timing.scan.fieldCount = wishes.length;
   const pipelineStart = Date.now();
   let orderCount = 0;
-  const hitsFound = [];
-  const orderPromises = [];
   let firstOrderAt = null;
+  const orderPromises = [];
+
+  // 共享状态：每个志愿的扫描结果 + 完成信号
+  const scanState = wishes.map(() => ({ hit: false, done: false }));
+  const scanGate = wishes.map(() => { let r; return { p: new Promise(res => r = res), resolve() { r(); r = () => {}; } }; });
 
   const scanResults = await Promise.all(wishes.map(async (wish, i) => {
     const vid = wish.venueId || defaultVenueId;
     const fT0 = Date.now();
+    let hit = null;
     try {
       const slots = await sm2GetBookableTimes(wish.fieldId, uid);
       const fMs = Date.now() - fT0;
@@ -1544,18 +1548,9 @@ async function sm2Run(opts = {}) {
         const avail = !!ts;
         _timingScanField(wish.fieldId, vid, fMs, avail, null);
         if (ts) {
-          const hit = { wish, price: ts.price || 15, venueId: vid, rank: i + 1 };
-          hitsFound.push(hit);
+          hit = { wish, price: ts.price || 15, venueId: vid, rank: i + 1 };
+          scanState[i].hit = true;
           log(`🎯 命中! [${getVenueName(vid)}] ${wish.name} ${wish.time} ¥${hit.price}`);
-          // 立即下单（最多 MAX_BOOK 个），下单与剩余扫描并行
-          if (orderCount < MAX_BOOK) {
-            orderCount++;
-            if (!firstOrderAt) firstOrderAt = Date.now();
-            const orderP = sm2CreateOrder(wish.fieldId, wish.time, wish.timeEnd, today, vid, uid)
-              .then(order => ({ hit, order }));
-            orderPromises.push(orderP);
-          }
-          return hit;
         }
       } else {
         _timingScanField(wish.fieldId, vid, fMs, false, slots.code !== 0 ? `code=${slots.code}` : 'no_data');
@@ -1563,14 +1558,32 @@ async function sm2Run(opts = {}) {
     } catch(e) {
       _timingScanField(wish.fieldId, vid, Date.now() - fT0, false, e.message);
     }
-    log(`⏳ [第${i+1}志愿] [${getVenueName(vid)}] ${wish.name} ${wish.time} 不可用`);
-    return null;
+    if (!hit) log(`⏳ [第${i+1}志愿] [${getVenueName(vid)}] ${wish.name} ${wish.time} 不可用`);
+    // 先置状态再发信号（保证等待者看到最新 hit 状态）
+    scanState[i].done = true;
+    scanGate[i].resolve();
+
+    // 命中 → 等所有更高优先级扫完 → 确认没有更高优先级命中 → 下单
+    if (hit && orderCount < MAX_BOOK) {
+      await Promise.all(scanGate.slice(0, i).map(g => g.p));
+      // 所有更高优先级已扫完，检查是否被它们占了
+      const blocked = scanState.slice(0, i).some(s => s.hit);
+      if (!blocked && orderCount < MAX_BOOK) {
+        orderCount++;
+        if (!firstOrderAt) firstOrderAt = Date.now();
+        const orderP = sm2CreateOrder(wish.fieldId, wish.time, wish.timeEnd, today, vid, uid)
+          .then(order => ({ hit, order }));
+        orderPromises.push(orderP);
+      }
+    }
+    return hit;
   }));
+  const hits = scanResults.filter(Boolean);
   const scanMs = Date.now() - pipelineStart;
   _timing.scan.durationMs = scanMs;
-  _timing.scan.hits = hitsFound.length;
+  _timing.scan.hits = hits.length;
 
-  // 等到所有下单完成（此时剩余扫描可能也刚完成，重叠最大）
+  // 等到所有下单完成
   if (orderPromises.length > 0) {
     _timing.order.count = orderPromises.length;
     _timing.order.startMs = firstOrderAt || Date.now();
@@ -1598,7 +1611,7 @@ async function sm2Run(opts = {}) {
     }
   }
 
-  // === 监测（SM2 直连，4场并发 ~250ms/轮，5秒窗口 ≈ 20轮） ===
+  // === 监测（SM2 直连，每轮内优先级保序 + 流水线） ===
   if (!booked && wishes.length > 0) {
     const MONITOR_MS = 5000;
     const monitorStart = Date.now();
@@ -1606,10 +1619,14 @@ async function sm2Run(opts = {}) {
     log(`🔍 SM2 连续监测（${wishes.length}志愿，约250ms/轮，最长${MONITOR_MS/1000}s）...`);
     while (!booked && (Date.now() - monitorStart) < MONITOR_MS) {
       loopCount++;
-      // 🚀 流水线：每轮扫描命中即下单，不等其他场
-      let roundOrderCount = 0;
-      const roundOrderPs = [];
-      const reScanResults = await Promise.all(wishes.map(async (wish) => {
+      // 🚀 每轮内：并发扫描 + 命中即下单（优先级保序）
+      const rScanState = wishes.map(() => ({ hit: false, done: false }));
+      const rScanGate = wishes.map(() => { let r; return { p: new Promise(res => r = res), resolve() { r(); r = () => {}; } }; });
+      let rOrderCount = 0;
+      const rOrderPs = [];
+
+      const reScanResults = await Promise.all(wishes.map(async (wish, i) => {
+        let hit = null;
         try {
           const slots = await sm2GetBookableTimes(wish.fieldId, uid);
           if (slots.success && slots.code === 0 && slots.data) {
@@ -1617,23 +1634,28 @@ async function sm2Run(opts = {}) {
             const day = days.find(d => d.date === today) || days[0];
             const ts = day?.timeSlots?.find(s => s.startTime === wish.time && s.bookable === true);
             if (ts) {
-              const hit = { wish, price: ts.price || 15, venueId: wish.venueId || defaultVenueId };
-              if (!booked && roundOrderCount < MAX_BOOK) {
-                roundOrderCount++;
-                log(`🎯 监测到! ${hit.wish.name} ${hit.wish.time} 可预约!`);
-                const orderP = sm2CreateOrder(wish.fieldId, wish.time, wish.timeEnd, today, wish.venueId || defaultVenueId, uid)
-                  .then(order => ({ hit, order }));
-                roundOrderPs.push(orderP);
-              }
-              return hit;
+              hit = { wish, price: ts.price || 15, venueId: wish.venueId || defaultVenueId };
+              rScanState[i].hit = true;
             }
           }
         } catch(e) {}
-        return null;
+        rScanState[i].done = true;
+        rScanGate[i].resolve();
+        if (hit && !booked && rOrderCount < MAX_BOOK) {
+          await Promise.all(rScanGate.slice(0, i).map(g => g.p));
+          if (!rScanState.slice(0, i).some(s => s.hit) && !booked && rOrderCount < MAX_BOOK) {
+            rOrderCount++;
+            log(`🎯 监测到! ${hit.wish.name} ${hit.wish.time} 可预约!`);
+            const orderP = sm2CreateOrder(wish.fieldId, wish.time, wish.timeEnd, today, wish.venueId || defaultVenueId, uid)
+              .then(order => ({ hit, order }));
+            rOrderPs.push(orderP);
+          }
+        }
+        return hit;
       }));
-      // 等本轮下单完成
-      if (roundOrderPs.length > 0) {
-        const roundResults = await Promise.all(roundOrderPs);
+
+      if (rOrderPs.length > 0) {
+        const roundResults = await Promise.all(rOrderPs);
         for (const { hit, order } of roundResults) {
           if (order && order.success && order.code === 0) {
             log(`🎉 到手! ${hit.wish.name} ${hit.wish.time} 订单: ${order.data?.orderNo || order.data?.id || '?'}`);
